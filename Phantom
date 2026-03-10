@@ -1,0 +1,2847 @@
+# FlexWallet PWA — Full Codebase
+Generated: Tue Mar 10 17:56:31 CET 2026
+
+---
+## app/layout.tsx
+```
+import type { Metadata, Viewport } from 'next'
+import { Inter } from 'next/font/google'
+import './globals.css'
+import { WalletProvider } from '@/lib/WalletContext'
+
+const inter = Inter({ subsets: ['latin'], display: 'swap' })
+
+export const metadata: Metadata = {
+  title: 'Phantom',
+  description: 'Phantom Wallet',
+  manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black',
+    title: 'Phantom',
+  },
+}
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  themeColor: '#000000',
+}
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en" className={inter.className}>
+      <head>
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+        <meta name="apple-mobile-web-app-title" content="Phantom" />
+        <link rel="apple-touch-icon" href="/icon-192.png" />
+      </head>
+      <body style={{ background: '#191919', minHeight: '100vh' }}>
+        <WalletProvider>
+          {children}
+        </WalletProvider>
+      </body>
+    </html>
+  )
+}
+```
+
+---
+## app/globals.css
+```
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { height: 100%; -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none; }
+body {
+  background: #191919;
+  color: #FFF;
+  font-family: -apple-system, 'SF Pro Display', 'Inter', BlinkMacSystemFont, sans-serif;
+  min-height: 100%;
+  overscroll-behavior: none;
+  -webkit-font-smoothing: antialiased;
+}
+* { -webkit-overflow-scrolling: touch; }
+a { color: inherit; text-decoration: none; }
+button { font-family: inherit; }
+
+.tap-feedback {
+  cursor: pointer;
+  transition: transform 0.12s cubic-bezier(0.4,0,0.2,1), opacity 0.12s ease;
+  -webkit-user-select: none;
+  user-select: none;
+  will-change: transform;
+}
+.tap-feedback:active { transform: scale(0.96); opacity: 0.7; }
+
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.spinner { animation: spin 0.75s linear infinite; }
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-up { animation: fadeUp 0.25s cubic-bezier(0.4,0,0.2,1) both; }
+
+/* iOS safe area support */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Prevent content from going under bottom nav on iPhone */
+.page-container {
+  padding-bottom: calc(83px + env(safe-area-inset-bottom, 0px)) !important;
+}
+
+/* Bottom nav sits above home indicator */
+.bottom-nav {
+  padding-bottom: env(safe-area-inset-bottom, 0px) !important;
+  height: calc(60px + env(safe-area-inset-bottom, 0px)) !important;
+}
+```
+
+---
+## app/page.tsx
+```
+'use client'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import Link from 'next/link'
+import BottomNav from '@/components/BottomNav'
+import { TOKENS, fetchPrices, PricesMap, FALLBACK_PRICES, formatAmount, formatValue } from '@/lib/coingecko'
+import { getTokenAmounts, setTokenAmounts, WALLET_ADDRESS_SHORT, getBalanceHidden, setBalanceHidden, getSelectedWallet, setSelectedWallet, getWalletName, setWalletName as saveWalletName, getWalletHandle, setWalletHandle as saveWalletHandle } from '@/lib/storage'
+import { showNotification } from '@/lib/notifications'
+
+const WALLETS = ['Account 1', 'Account 2', 'Account 3']
+
+function PhantomAvatar({ seed }: { seed: string }) {
+  return (
+    <div style={{width:36,height:36,borderRadius:18,background:'#E8845C',display:'flex',alignItems:'center',justifyContent:'center',overflow:'hidden',flexShrink:0}}>
+      <svg viewBox="0 0 100 120" width="26" height="26">
+        <path d="M50 5 C25 5 15 25 15 50 L15 95 Q22 85 30 95 Q38 85 46 95 Q54 85 62 95 Q70 85 78 95 Q85 85 85 50 C85 25 75 5 50 5 Z" fill="white"/>
+        <circle cx="38" cy="48" r="7" fill="#1a1a2e"/>
+        <circle cx="62" cy="48" r="7" fill="#1a1a2e"/>
+        <circle cx="40" cy="46" r="3" fill="white"/>
+        <circle cx="64" cy="46" r="3" fill="white"/>
+        <path d="M40 65 Q50 72 60 65" stroke="#1a1a2e" strokeWidth="3" fill="none" strokeLinecap="round"/>
+        <text x="50" y="90" fontSize="14" fontWeight="bold" fill="#E8845C" textAnchor="middle" fontFamily="sans-serif">aa</text>
+      </svg>
+    </div>
+  )
+}
+
+function VerifiedBadge() {
+  return (
+    <span style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:16, height:16, borderRadius:8, background:'#3B82F6', marginLeft:4, flexShrink:0 }}>
+      <svg width="8" height="6" viewBox="0 0 9 7" fill="none">
+        <path d="M1 3.5L3.5 6L8 1" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+      </svg>
+    </span>
+  )
+}
+
+function formatDollarChange(val: number): string {
+  if (val === 0) return '$0.00'
+  const abs = Math.abs(val)
+  if (abs < 0.01) return (val >= 0 ? '+ ' : '') + '<$0.01'
+  return (val >= 0 ? '+ $' : '- $') + abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+export default function Home() {
+  const [prices, setPrices] = useState<PricesMap>(FALLBACK_PRICES)
+  const [amounts, setAmounts] = useState<Record<string, number>>({})
+  const [walletName, setWalletNameState] = useState('Vault')
+  const [walletHandle, setWalletHandleState] = useState('@ghosti')
+  const [selectedWalletState, setSelectedWalletState] = useState('Account 1')
+  const [balanceHidden, setBalanceHiddenState] = useState(false)
+  const [showDropdown, setShowDropdown] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+  const touchStartY = useRef(0)
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  const [showEditor, setShowEditor] = useState(false)
+  const [editAmounts, setEditAmounts] = useState<Record<string, number>>({})
+  const [balanceTapCount, setBalanceTapCount] = useState(0)
+  const [balanceLastTap, setBalanceLastTap] = useState(0)
+
+  const [showNameEditor, setShowNameEditor] = useState(false)
+  const [editName, setEditName] = useState('')
+  const [editHandle, setEditHandle] = useState('')
+  const [nameTapCount, setNameTapCount] = useState(0)
+  const [nameLastTap, setNameLastTap] = useState(0)
+
+  useEffect(() => {
+    setAmounts(getTokenAmounts())
+    const w = getSelectedWallet()
+    setWalletNameState(getWalletName() || 'Vault')
+    setSelectedWalletState(w || 'Account 1')
+    setBalanceHiddenState(getBalanceHidden())
+    setWalletHandleState(getWalletHandle() || '@ghosti')
+    fetchPrices().then(setPrices)
+    const interval = setInterval(() => fetchPrices().then(setPrices), 30000)
+    return () => clearInterval(interval)
+  }, [])
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+      setTimeout(() => Notification.requestPermission(), 3000)
+    }
+  }, [])
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      showNotification('deposit', {
+        token: 'SOL',
+        amount: (Math.random() * 2 + 0.1).toFixed(4),
+        from: '9xKp2mN7qR'
+      })
+    }, 10000)
+    return () => clearTimeout(timer)
+  }, [])
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const tokens = ['SOL', 'BTC', 'ETH']
+      const token = tokens[Math.floor(Math.random() * tokens.length)]
+      const tokenId = token === 'SOL' ? 'solana' : token === 'BTC' ? 'bitcoin' : 'ethereum'
+      const price = prices[tokenId]?.usd
+      if (price) {
+        showNotification('price', { token, price: price.toLocaleString('en-US', { maximumFractionDigits: 2 }) })
+      }
+    }, 30 * 60 * 1000)
+    return () => clearInterval(interval)
+  }, [prices])
+
+  const handleBalanceTap = () => {
+    const now = Date.now()
+    if (now - balanceLastTap < 500) {
+      const newCount = balanceTapCount + 1
+      if (newCount >= 3) {
+        setShowEditor(true)
+        setEditAmounts({...amounts})
+        setBalanceTapCount(0)
+      } else {
+        setBalanceTapCount(newCount)
+      }
+    } else {
+      setBalanceTapCount(1)
+    }
+    setBalanceLastTap(now)
+  }
+
+  const handleNameTap = () => {
+    const now = Date.now()
+    if (now - nameLastTap < 500) {
+      const newCount = nameTapCount + 1
+      if (newCount >= 3) {
+        setEditName(walletName)
+        setEditHandle(walletHandle)
+        setShowNameEditor(true)
+        setNameTapCount(0)
+      } else {
+        setNameTapCount(newCount)
+      }
+    } else {
+      setNameTapCount(1)
+    }
+    setNameLastTap(now)
+  }
+
+  const saveEditorAmounts = () => {
+    setAmounts(editAmounts)
+    setTokenAmounts(editAmounts)
+    setShowEditor(false)
+  }
+
+  const saveNameEditor = () => {
+    setWalletNameState(editName)
+    setWalletHandleState(editHandle)
+    saveWalletName(editName)
+    saveWalletHandle(editHandle)
+    setShowNameEditor(false)
+  }
+
+  const refreshPrices = useCallback(async () => {
+    if (refreshing) return
+    setRefreshing(true)
+    const p = await fetchPrices()
+    setPrices(p)
+    setTimeout(() => setRefreshing(false), 800)
+  }, [refreshing])
+
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    touchStartY.current = e.touches[0].clientY
+  }, [])
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    const scrollTop = scrollRef.current?.scrollTop || 0
+    const delta = e.changedTouches[0].clientY - touchStartY.current
+    if (delta > 80 && scrollTop <= 0) refreshPrices()
+  }, [refreshPrices])
+
+  const totalValue = TOKENS.reduce((s, t) => s + (prices[t.id]?.usd || 0) * (amounts[t.symbol] || 0), 0)
+  const totalChange = TOKENS.reduce((s, t) => {
+    const p = prices[t.id]?.usd || 0, c = prices[t.id]?.usd_24h_change || 0, a = amounts[t.symbol] || 0
+    return s + (p * a * c / 100)
+  }, 0)
+  const changePct = totalValue > 0 ? (totalChange / (totalValue - totalChange)) * 100 : 0
+  const isPos = changePct >= 0
+
+  const tokenRows = TOKENS.map(t => {
+    const p = prices[t.id]?.usd || 0, c = prices[t.id]?.usd_24h_change || 0, a = amounts[t.symbol] || 0
+    return { ...t, price: p, change: c, amount: a, value: p * a, dollarChange: p * a * c / 100 }
+  }).sort((a, b) => b.value - a.value)
+
+  function pickWallet(w: string) {
+    setWalletNameState(w); setSelectedWalletState(w)
+    setSelectedWallet(w); setShowDropdown(false)
+  }
+  function toggleBalance() {
+    const n = !balanceHidden; setBalanceHiddenState(n); setBalanceHidden(n)
+  }
+  const fmt = (v: number) => `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
+  const TOKEN_SYMBOLS = ['SOL', 'BTC', 'ETH', 'USDT', 'USDC', 'BONK', 'JUP', 'WIF']
+
+  return (
+    <div ref={scrollRef} onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}
+      style={{ background:'#000000', minHeight:'100vh', maxWidth:430, margin:'0 auto', paddingBottom:'calc(70px + env(safe-area-inset-bottom, 0px))', overflowY:'auto', fontFamily:'-apple-system, SF Pro Display, Inter, sans-serif' }}>
+
+      {refreshing && (
+        <div style={{ display:'flex', justifyContent:'center', paddingTop:16, paddingBottom:8 }}>
+          <svg className="spinner" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ab9ff2" strokeWidth="2">
+            <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+          </svg>
+        </div>
+      )}
+
+      {/* HEADER */}
+      <div style={{ padding:'14px 16px 0', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10, flex:1, minWidth:0 }}>
+          <PhantomAvatar seed={walletName}/>
+          <div style={{ minWidth:0 }}>
+            <div style={{ fontSize:13, color:'#8e8e93', lineHeight:1.2 }}>{walletHandle}</div>
+            <button className="tap-feedback" onClick={(e) => { e.stopPropagation(); handleNameTap() }}
+              style={{ background:'none', border:'none', cursor:'pointer', padding:0, display:'flex', alignItems:'center', gap:4 }}>
+              <span style={{ fontSize:17, fontWeight:700, color:'#ffffff', fontFamily:'inherit' }}>{walletName}</span>
+            </button>
+          </div>
+        </div>
+        <div style={{ display:'flex', gap:16, alignItems:'center', flexShrink:0 }}>
+          <button className="tap-feedback" style={{ background:'none', border:'none', cursor:'pointer', color:'#ffffff', padding:0, display:'flex' }}>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+              <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+            </svg>
+          </button>
+          <button className="tap-feedback" style={{ background:'none', border:'none', cursor:'pointer', color:'#ffffff', padding:0, display:'flex' }}>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+              <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+            </svg>
+          </button>
+        </div>
+
+        {showDropdown && <>
+          <div onClick={()=>setShowDropdown(false)} style={{ position:'fixed', inset:0, zIndex:99 }}/>
+          <div style={{ position:'absolute', top:68, left:16, background:'#222222', border:'1px solid #3a3a3a', borderRadius:14, padding:'6px 0', zIndex:100, minWidth:180, boxShadow:'0 12px 40px rgba(0,0,0,0.9)' }}>
+            {WALLETS.map(w => (
+              <button key={w} onClick={()=>pickWallet(w)} className="tap-feedback"
+                style={{ display:'block', width:'100%', background:'none', border:'none', padding:'12px 18px', textAlign:'left', color: selectedWalletState===w?'#ab9ff2':'#eeeeee', fontSize:15, fontWeight: selectedWalletState===w?600:400, cursor:'pointer', fontFamily:'inherit' }}>
+                {selectedWalletState===w&&'✓ '}{w}
+              </button>
+            ))}
+            <div style={{ height:1, background:'#3a3a3a', margin:'4px 0' }}/>
+            <button className="tap-feedback" style={{ display:'block', width:'100%', background:'none', border:'none', padding:'12px 18px', textAlign:'left', color:'#ab9ff2', fontSize:15, cursor:'pointer', fontFamily:'inherit' }}>+ Add Account</button>
+          </div>
+        </>}
+      </div>
+
+      {/* BALANCE */}
+      <div style={{ padding:'20px 16px 4px' }}>
+        <div style={{ fontSize:44, fontWeight:700, color:'#ffffff', letterSpacing:-1.5, lineHeight:1.05, cursor:'pointer', userSelect:'none' }} onClick={handleBalanceTap}>
+          {balanceHidden ? '••••••' : fmt(totalValue)}
+        </div>
+        {!balanceHidden && (
+          <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:8 }}>
+            <span style={{ fontSize:14, fontWeight:600, color: isPos?'#19FB9B':'#e54d2e' }}>
+              {totalChange >= 0 ? '+' : '-'}${Math.abs(totalChange).toLocaleString('en-US', { minimumFractionDigits:2, maximumFractionDigits:2 })}
+            </span>
+            <span style={{ background: isPos?'rgba(25,251,155,0.12)':'rgba(229,77,46,0.15)', color: isPos?'#19FB9B':'#e54d2e', fontSize:13, fontWeight:600, borderRadius:10, padding:'3px 8px' }}>
+              {isPos?'+':''}{changePct.toFixed(2)}%
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* ACTION BUTTONS */}
+      <div style={{ display:'flex', gap:8, padding:'16px 16px 20px' }}>
+        {[
+          { label:'Send', href:'/send', icon:<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ab9ff2" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2L11 13"/><path d="M22 2L15 22l-4-9-9-4 20-7z"/></svg> },
+          { label:'Swap', href:'/swap', icon:<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ab9ff2" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M16 3l4 4-4 4"/><path d="M20 7H8a4 4 0 0 0-4 4"/><path d="M8 21l-4-4 4-4"/><path d="M4 17h12a4 4 0 0 0 4-4"/></svg> },
+          { label:'Receive', href:'/receive', icon:<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ab9ff2" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="3" height="3" rx="0.5"/><rect x="18" y="14" width="3" height="3" rx="0.5"/><rect x="14" y="18" width="3" height="3" rx="0.5"/><rect x="18" y="18" width="3" height="3" rx="0.5"/></svg> },
+          { label:'Buy', href:'/buy', icon:<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ab9ff2" strokeWidth="1.8" strokeLinecap="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg> },
+        ].map(btn => (
+          <Link key={btn.label} href={btn.href} className="tap-feedback" style={{textDecoration:'none', flex:1}}>
+            <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:8 }}>
+              <div style={{ width:'100%', height:72, borderRadius:16, background:'#1c1c1e', border:'1px solid rgba(255,255,255,0.06)', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                {btn.icon}
+              </div>
+              <span style={{ fontSize:12, color:'#8e8e93', fontWeight:500 }}>{btn.label}</span>
+            </div>
+          </Link>
+        ))}
+      </div>
+
+      {/* CASH BALANCE CARD */}
+      <div style={{ margin:'0 16px 16px', background:'#161618', borderRadius:18, padding:'16px 16px' }}>
+        <div style={{ fontSize:13, color:'#8e8e93', marginBottom:4 }}>Cash Balance</div>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+          <div style={{ fontSize:22, fontWeight:700, color:'#ffffff' }}>
+            {balanceHidden ? '••••' : '$17,382.41'}
+          </div>
+          <Link href="/cash" className="tap-feedback" style={{textDecoration:'none'}}>
+            <div style={{ background:'#ab9ff2', borderRadius:20, padding:'8px 20px', fontSize:15, fontWeight:600, color:'#000000' }}>
+              Add Cash
+            </div>
+          </Link>
+        </div>
+      </div>
+
+      {/* TOKENS HEADER */}
+      <div style={{ padding:'8px 16px 10px' }}>
+        <button className="tap-feedback" style={{ background:'none', border:'none', color:'#ffffff', fontSize:18, fontWeight:700, cursor:'pointer', display:'flex', alignItems:'center', gap:6, fontFamily:'inherit', padding:0 }}>
+          Tokens
+          <svg width="10" height="16" viewBox="0 0 10 16" fill="none">
+            <path d="M2 2l6 6-6 6" stroke="#8e8e93" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </button>
+      </div>
+
+      {/* TOKEN LIST */}
+      <div style={{ padding:'0 16px', display:'flex', flexDirection:'column', gap:2 }}>
+        {tokenRows.map(token => (
+          <Link key={token.symbol} href={`/token/${token.id}`} className="tap-feedback" style={{textDecoration:'none'}}>
+            <div style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 14px', background:'#161618', borderRadius:16 }}>
+              <div style={{ position:'relative', flexShrink:0 }}>
+                <div style={{ width:44, height:44, borderRadius:22, background:'#1a1a1a', display:'flex', alignItems:'center', justifyContent:'center', overflow:'hidden' }}>
+                  <img src={token.logo} alt={token.symbol}
+                    style={{ width:44, height:44, borderRadius:22, objectFit:'cover', display:'block' }}
+                    onError={e=>{(e.target as HTMLImageElement).style.display='none'}}
+                  />
+                </div>
+                {['BONK','WIF','JUP','USDC','USDT'].includes(token.symbol) && (
+                  <div style={{position:'absolute',bottom:-2,right:-2,width:16,height:16,borderRadius:8,background:'#000',border:'2px solid #1c1c1e',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                    <svg width="9" height="9" viewBox="0 0 20 20"><defs><linearGradient id={`sol-${token.symbol}`} x1="0%" y1="100%" x2="100%" y2="0%"><stop offset="0%" stopColor="#9945FF"/><stop offset="100%" stopColor="#14F195"/></linearGradient></defs><path d="M3 14h11l3-3H6L3 14zm0-5h11l3-3H6L3 9zm14-5H6L3 7h11l3-3z" fill={`url(#sol-${token.symbol})`}/></svg>
+                  </div>
+                )}
+              </div>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ display:'flex', alignItems:'center' }}>
+                  <span style={{ fontSize:16, fontWeight:600, color:'#ffffff' }}>{token.name}</span>
+                  <VerifiedBadge/>
+                </div>
+                <div style={{ fontSize:14, color:'#8e8e93', marginTop:2 }}>
+                  {balanceHidden ? '••••' : formatAmount(token.amount, token.symbol)}
+                </div>
+              </div>
+              <div style={{ textAlign:'right', flexShrink:0 }}>
+                <div style={{ fontSize:16, fontWeight:600, color:'#ffffff' }}>
+                  {balanceHidden ? '••••' : formatValue(token.value)}
+                </div>
+                {Math.abs(token.dollarChange) >= 0.001 && (
+                  <div style={{ fontSize:14, color: token.dollarChange > 0 ? '#19FB9B' : token.dollarChange < 0 ? '#e54d2e' : '#8e8e93', marginTop:2 }}>
+                    {balanceHidden ? '••••' : formatDollarChange(token.dollarChange)}
+                  </div>
+                )}
+              </div>
+            </div>
+          </Link>
+        ))}
+      </div>
+
+      {/* BALANCE EDITOR MODAL */}
+      {showEditor && (
+        <>
+          <div onClick={() => setShowEditor(false)} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:200 }} />
+          <div style={{ position:'fixed', bottom:0, left:0, right:0, background:'#1c1c1e', borderTopLeftRadius:24, borderTopRightRadius:24, zIndex:201, maxHeight:'80vh', overflowY:'auto', padding:'20px 20px calc(20px + env(safe-area-inset-bottom, 0px))' }}>
+            <div style={{ width:40, height:4, borderRadius:2, background:'#3a3a3a', margin:'0 auto 16px' }} />
+            <h3 style={{ fontSize:18, fontWeight:700, color:'#ffffff', margin:'0 0 20px', textAlign:'center' }}>Edit Balances</h3>
+            {TOKEN_SYMBOLS.map(sym => (
+              <div key={sym} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
+                <span style={{ fontSize:15, fontWeight:600, color:'#ffffff', width:60 }}>{sym}</span>
+                <input
+                  type="number"
+                  value={editAmounts[sym] ?? 0}
+                  onChange={e => setEditAmounts(prev => ({ ...prev, [sym]: parseFloat(e.target.value) || 0 }))}
+                  style={{ flex:1, background:'#2c2c2e', border:'1px solid #3a3a3a', borderRadius:12, padding:'10px 14px', color:'#ffffff', fontSize:15, outline:'none', fontFamily:'inherit', marginLeft:12 }}
+                  inputMode="decimal"
+                />
+              </div>
+            ))}
+            <div style={{ display:'flex', gap:12, marginTop:20 }}>
+              <button onClick={() => setShowEditor(false)} style={{ flex:1, background:'#2c2c2e', border:'none', borderRadius:14, padding:'14px', fontSize:15, fontWeight:600, color:'#ffffff', cursor:'pointer', fontFamily:'inherit' }}>Cancel</button>
+              <button onClick={saveEditorAmounts} style={{ flex:1, background:'#ab9ff2', border:'none', borderRadius:14, padding:'14px', fontSize:16, fontWeight:600, color:'#000', cursor:'pointer', fontFamily:'inherit' }}>Save</button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* WALLET NAME EDITOR MODAL */}
+      {showNameEditor && (
+        <>
+          <div onClick={() => setShowNameEditor(false)} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:200 }} />
+          <div style={{ position:'fixed', bottom:0, left:0, right:0, background:'#1c1c1e', borderTopLeftRadius:24, borderTopRightRadius:24, zIndex:201, padding:'20px 20px calc(20px + env(safe-area-inset-bottom, 0px))' }}>
+            <div style={{ width:40, height:4, borderRadius:2, background:'#3a3a3a', margin:'0 auto 16px' }} />
+            <h3 style={{ fontSize:18, fontWeight:700, color:'#ffffff', margin:'0 0 20px', textAlign:'center' }}>Edit Wallet Info</h3>
+            <div style={{ marginBottom:12 }}>
+              <label style={{ fontSize:12, color:'#8e8e93', marginBottom:6, display:'block' }}>Wallet Name</label>
+              <input
+                type="text"
+                value={editName}
+                onChange={e => setEditName(e.target.value)}
+                style={{ width:'100%', background:'#2c2c2e', border:'1px solid #3a3a3a', borderRadius:12, padding:'10px 14px', color:'#ffffff', fontSize:15, outline:'none', fontFamily:'inherit', boxSizing:'border-box' }}
+              />
+            </div>
+            <div style={{ marginBottom:20 }}>
+              <label style={{ fontSize:12, color:'#8e8e93', marginBottom:6, display:'block' }}>Handle</label>
+              <input
+                type="text"
+                value={editHandle}
+                onChange={e => setEditHandle(e.target.value)}
+                placeholder="@username"
+                style={{ width:'100%', background:'#2c2c2e', border:'1px solid #3a3a3a', borderRadius:12, padding:'10px 14px', color:'#ffffff', fontSize:15, outline:'none', fontFamily:'inherit', boxSizing:'border-box' }}
+              />
+            </div>
+            <div style={{ display:'flex', gap:12 }}>
+              <button onClick={() => setShowNameEditor(false)} style={{ flex:1, background:'#2c2c2e', border:'none', borderRadius:14, padding:'14px', fontSize:15, fontWeight:600, color:'#ffffff', cursor:'pointer', fontFamily:'inherit' }}>Cancel</button>
+              <button onClick={saveNameEditor} style={{ flex:1, background:'#ab9ff2', border:'none', borderRadius:14, padding:'14px', fontSize:16, fontWeight:600, color:'#000', cursor:'pointer', fontFamily:'inherit' }}>Save</button>
+            </div>
+          </div>
+        </>
+      )}
+
+      <BottomNav/>
+    </div>
+  )
+}
+```
+
+---
+## app/token/[id]/page.tsx
+```
+'use client'
+import { useState, useEffect, useRef } from 'react'
+import { useRouter } from 'next/navigation'
+import { TOKENS, fetchPrices, fetchChartData, FALLBACK_PRICES, formatAmount } from '@/lib/coingecko'
+import { getTokenAmounts } from '@/lib/storage'
+
+const TIME_PERIODS = ['1H','1D','1W','1M','YTD','ALL']
+
+function getDaysForPeriod(period: string): number | 'max' {
+  const now = new Date()
+  const startOfYear = new Date(now.getFullYear(), 0, 1)
+  const ytdDays = Math.ceil((now.getTime() - startOfYear.getTime()) / (1000 * 60 * 60 * 24))
+  const daysMap: Record<string, number | 'max'> = {
+    '1H': 0.042,
+    '1D': 1,
+    '1W': 7,
+    '1M': 30,
+    'YTD': ytdDays,
+    'ALL': 'max'
+  }
+  return daysMap[period] || 1
+}
+
+function renderChart(prices: [number,number][], color: string) {
+  if (!prices || prices.length < 2) return null
+  const vals = prices.map(p => p[1])
+  const min = Math.min(...vals)
+  const max = Math.max(...vals)
+  const range = max - min || 1
+  const w = 390
+  const h = 200
+  const pts = prices.map((p, i) => {
+    const x = (i / (prices.length - 1)) * w
+    const y = h - ((p[1] - min) / range) * 180 + 10
+    return `${x},${y}`
+  })
+  const lastX = ((prices.length - 1) / (prices.length - 1)) * w
+  const lastY = h - ((vals[vals.length - 1] - min) / range) * 180 + 10
+  const polyline = pts.join(' ')
+  const area = `0,${h} ${pts.join(' ')} ${w},${h}`
+  
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} style={{width:'100%',height:200,display:'block'}}>
+      <defs>
+        <linearGradient id="chartGrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.25"/>
+          <stop offset="100%" stopColor={color} stopOpacity="0"/>
+        </linearGradient>
+      </defs>
+      <polygon points={area} fill="url(#chartGrad)"/>
+      <polyline points={polyline} fill="none" stroke={color} strokeWidth="2.5"/>
+      <circle cx={lastX} cy={lastY} r="4" fill={color}/>
+    </svg>
+  )
+}
+
+function PriceChart({ prices, isPos, loading }: { prices: [number,number][], isPos: boolean, loading: boolean }) {
+  if (loading) {
+    return (
+      <div style={{ height:200, display:'flex', alignItems:'center', justifyContent:'center' }}>
+        <div style={{width:32,height:32,border:'3px solid #333',borderTop:'3px solid #AB9FF2',borderRadius:'50%',animation:'spin 1s linear infinite'}}/>
+      </div>
+    )
+  }
+  if (!prices || prices.length < 2) return <div style={{ height: 200 }} />
+  
+  const color = isPos ? '#00DC82' : '#FF453A'
+  return renderChart(prices, color)
+}
+
+const PEOPLE_COUNT: Record<string, number> = {
+  solana: 407, bitcoin: 892, ethereum: 672, tether: 128,
+  'usd-coin': 98, bonk: 341, 'jupiter-exchange-solana': 215, dogwifcoin: 287
+}
+
+const MARKET_DATA: Record<string, { marketCap: string, supply: string, volume: string, traders: string }> = {
+  solana: { marketCap: '$48.54B', supply: '570.8M', volume: '$12.67B', traders: '646.16K' },
+  bitcoin: { marketCap: '$1.73T', supply: '21M', volume: '$38.2B', traders: '1.24M' },
+  ethereum: { marketCap: '$312.4B', supply: '120.2M', volume: '$14.8B', traders: '892.3K' },
+  tether: { marketCap: '$139.8B', supply: '139.8B', volume: '$54.2B', traders: '2.1M' },
+  'usd-coin': { marketCap: '$42.3B', supply: '42.3B', volume: '$7.8B', traders: '456.2K' },
+  bonk: { marketCap: '$1.2B', supply: '100T', volume: '$234M', traders: '128.4K' },
+  'jupiter-exchange-solana': { marketCap: '$1.6B', supply: '10B', volume: '$89M', traders: '67.2K' },
+  dogwifcoin: { marketCap: '$920M', supply: '998.9M', volume: '$124M', traders: '84.6K' },
+}
+
+// Binance symbol mapping
+const BINANCE_SYMBOLS: Record<string, string> = {
+  'solana': 'SOLUSDT',
+  'bitcoin': 'BTCUSDT',
+  'ethereum': 'ETHUSDT',
+  'tether': 'USDTUSDT',
+  'usd-coin': 'USDCUSDT',
+  'bonk': 'BONKUSDT',
+  'jupiter-exchange-solana': 'JUPUSDT',
+  'dogwifcoin': 'WIFUSDT',
+}
+
+export default function TokenDetail({ params }: { params: { id: string } }) {
+  const { id } = params
+  const router = useRouter()
+  const token = TOKENS.find(t => t.id === id)
+  const [prices, setPrices] = useState(FALLBACK_PRICES)
+  const [amounts, setAmounts] = useState<Record<string, number>>({})
+  const [period, setPeriod] = useState('1D')
+  const [following, setFollowing] = useState(false)
+  const [chartPrices, setChartPrices] = useState<[number,number][]>([])
+  const [chartLoading, setChartLoading] = useState(false)
+  const [tokenImage, setTokenImage] = useState<string>('')
+  const [currentPrice, setCurrentPrice] = useState(0)
+  const [change24h, setChange24h] = useState(0)
+  const chartCacheRef = useRef<Record<string, [number,number][]>>({})
+
+  // Fetch token image from CoinGecko (once at startup)
+  useEffect(() => {
+    if (!token) return
+    fetch(`https://api.coingecko.com/api/v3/coins/${id}?localization=false&tickers=false&market_data=false&community_data=false&sparkline=false`)
+      .then(r => r.json())
+      .then(data => {
+        setTokenImage(data.image?.large || '')
+      })
+      .catch(() => {
+        // Fallback to token logo if fetch fails
+      })
+  }, [id, token])
+
+  // Fetch current price from Binance ticker
+  useEffect(() => {
+    if (!token) return
+    
+    const fetchCurrentPrice = async () => {
+      const symbol = BINANCE_SYMBOLS[id]
+      if (!symbol) {
+        // Fallback to hardcoded prices for stablecoins
+        if (prices[token.id]) {
+          setCurrentPrice(prices[token.id].usd)
+          setChange24h(prices[token.id].usd_24h_change)
+        }
+        return
+      }
+
+      try {
+        const res = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}`)
+        if (!res.ok) {
+          // Fallback
+          if (prices[token.id]) {
+            setCurrentPrice(prices[token.id].usd)
+            setChange24h(prices[token.id].usd_24h_change)
+          }
+          return
+        }
+        const t = await res.json()
+        setCurrentPrice(parseFloat(t.lastPrice))
+        setChange24h(parseFloat(t.priceChangePercent))
+      } catch (e) {
+        console.error('Current price fetch error:', e)
+        // Fallback
+        if (prices[token.id]) {
+          setCurrentPrice(prices[token.id].usd)
+          setChange24h(prices[token.id].usd_24h_change)
+        }
+      }
+    }
+
+    fetchCurrentPrice()
+    const interval = setInterval(fetchCurrentPrice, 30000)
+    return () => clearInterval(interval)
+  }, [id, token, prices])
+
+  useEffect(() => {
+    setAmounts(getTokenAmounts())
+    fetchPrices().then(setPrices)
+    const _interval = setInterval(() => fetchPrices().then(setPrices), 30000)
+    return () => clearInterval(_interval)
+  }, [])
+
+  // Fetch chart data using new fetchChartData function
+  useEffect(() => {
+    if (!token) return
+    const cacheKey = `${token.id}_${period}`
+    if (chartCacheRef.current[cacheKey]) {
+      setChartPrices(chartCacheRef.current[cacheKey])
+      setChartLoading(false)
+      return
+    }
+    
+    setChartLoading(true)
+    fetchChartData(token.id, period)
+      .then(pts => {
+        chartCacheRef.current[cacheKey] = pts
+        setChartPrices(pts)
+      })
+      .catch(() => setChartPrices([]))
+      .finally(() => setChartLoading(false))
+  }, [period, token?.id])
+
+  const displayPrice = currentPrice || (token ? (prices[token.id]?.usd || 0) : 0)
+  const displayChange24h = change24h !== undefined ? change24h : (token ? (prices[token.id]?.usd_24h_change || 0) : 0)
+  const amount = token ? (amounts[token.symbol] || 0) : 0
+  const value = displayPrice * amount
+  const people = token ? (PEOPLE_COUNT[token.id] || 100) : 100
+  const mktData = token ? (MARKET_DATA[token.id] || { marketCap:'N/A', supply:'N/A', volume:'N/A', traders:'N/A' }) : { marketCap:'N/A', supply:'N/A', volume:'N/A', traders:'N/A' }
+
+  // Calculate period change from chart data
+  const periodChange = chartPrices.length >= 2
+    ? ((chartPrices[chartPrices.length - 1][1] - chartPrices[0][1]) / chartPrices[0][1]) * 100
+    : displayChange24h
+  const isPos = periodChange >= 0
+  const dollarChange = value * displayChange24h / 100
+
+  if (!token) return (
+    <div style={{ background:'#000000', minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', color:'#8E8E93' }}>
+      Token not found
+    </div>
+  )
+
+  return (
+    <div style={{ background:'#000000', minHeight:'100vh', maxWidth:430, margin:'0 auto', paddingBottom:140, overflowY:'auto' }}>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      
+      {/* Header */}
+      <div style={{ padding:'10px 16px 12px', display:'flex', alignItems:'center', gap:10 }}>
+        <button onClick={()=>router.back()} className="tap-feedback" style={{ background:'none', border:'none', color:'#FFF', cursor:'pointer', padding:'0 4px 0 0', display:'flex', flexShrink:0 }}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M15 18l-6-6 6-6"/></svg>
+        </button>
+        {tokenImage ? (
+          <img src={tokenImage} alt={token.symbol} width={42} height={42} style={{ borderRadius:'50%', flexShrink:0 }}/>
+        ) : (
+          <img src={token.logo} alt={token.symbol} style={{ width:42, height:42, borderRadius:21, background:'#2A2A2D', flexShrink:0 }}/>
+        )}
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+            <span style={{ fontSize:18, fontWeight:700, color:'#FFF' }}>{token.name}</span>
+            {/* BLUE verified badge */}
+            <span style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:16, height:16, borderRadius:8, background:'#3B82F6', flexShrink:0 }}>
+              <svg width="9" height="7" viewBox="0 0 9 7" fill="none">
+                <path d="M1 3.5L3.5 6L8 1" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </span>
+          </div>
+          <div style={{ display:'flex', alignItems:'center', gap:5, marginTop:2 }}>
+            <div style={{ width:6, height:6, borderRadius:3, background:'#00DC82', display:'inline-block', marginRight:4 }}/>
+            <span style={{ fontSize:12, color:'#8E8E93' }}>{people} people here</span>
+          </div>
+        </div>
+        <button onClick={()=>setFollowing(!following)} className="tap-feedback" style={{
+          background: '#2C2C2E',
+          border: 'none',
+          color: '#FFFFFF',
+          borderRadius: 20, padding: '6px 16px', fontSize:13, fontWeight:600,
+          cursor:'pointer', fontFamily:'inherit', flexShrink:0
+        }}>
+          {following ? 'Following' : 'Follow'}
+        </button>
+        <button className="tap-feedback" style={{ background:'none', border:'none', cursor:'pointer', color:'#8E8E93', padding:0, display:'flex', flexShrink:0 }}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+        </button>
+      </div>
+
+      {/* Price */}
+      <div style={{ padding:'4px 16px 8px' }}>
+        <div style={{ fontSize:40, fontWeight:700, color:'#FFF', letterSpacing:-1 }}>
+          ${displayPrice.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:displayPrice<1?6:2})}
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:6 }}>
+          <span style={{ fontSize:15, fontWeight:500, color: isPos?'#00DC82':'#FF453A' }}>
+            {isPos?'+$':'-$'}{Math.abs(dollarChange).toFixed(2)}
+          </span>
+          <span style={{ background: isPos?'#00DC82':'#FF453A', color:'#FFF', fontSize:13, fontWeight:600, borderRadius:20, padding:'3px 10px' }}>
+            {isPos?'+':''}{periodChange.toFixed(2)}%
+          </span>
+        </div>
+      </div>
+
+      {/* Chart */}
+      <div style={{ margin:'4px 0 0', paddingLeft:0, paddingRight:0 }}>
+        <PriceChart prices={chartPrices} isPos={isPos} loading={chartLoading}/>
+      </div>
+
+      {/* Time period selector */}
+      <div style={{ display:'flex', justifyContent:'space-between', width:'100%', padding:'0 4px 16px', gap:4 }}>
+        {TIME_PERIODS.map(p => (
+          <button key={p} onClick={()=>setPeriod(p)} className="tap-feedback" style={{
+            flex:1, background: period===p?'#2C2C2E':'none',
+            border:'none', borderRadius:20, padding:'6px 10px',
+            fontSize:14, fontWeight:600,
+            color: period===p?'#FFFFFF':'#8E8E93',
+            cursor:'pointer', fontFamily:'inherit',
+          }}>{p}</button>
+        ))}
+      </div>
+
+      {/* Action buttons */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:10, padding:'0 16px 16px' }}>
+        {[
+          { label:'Send', icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#AB9FF2" strokeWidth="2" strokeLinecap="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2" fill="#AB9FF2" stroke="none"/></svg> },
+          { label:'Long',  icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#AB9FF2" strokeWidth="2" strokeLinecap="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg> },
+          { label:'Short', icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#AB9FF2" strokeWidth="2" strokeLinecap="round"><polyline points="22 17 13.5 8.5 8.5 13.5 2 7"/><polyline points="16 17 22 17 22 11"/></svg> },
+          { label:'More',  icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="#AB9FF2"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg> },
+        ].map(btn => (
+          <button key={btn.label} className="tap-feedback" style={{
+            background:'#1C1C1E', borderRadius:16, border:'none', cursor:'pointer',
+            display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
+            gap:6, flex:1, height:72, fontFamily:'inherit',
+          }}>
+            {btn.icon}
+            <span style={{ fontSize:12, fontWeight:500, color:'#FFF' }}>{btn.label}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Join Chat */}
+      <div style={{ margin:'0 16px 16px', background:'#1C1C1E', borderRadius:16, padding:'14px 16px', display:'flex', alignItems:'center', gap:12 }}>
+        <div style={{ display:'flex' }}>
+          {[{ bg:'#FF6B6B', emoji:'😊' }, { bg:'#4ECDC4', emoji:'🦊' }, { bg:'#45B7D1', emoji:'🐱' }].map((a,i) => (
+            <div key={i} style={{ width:28, height:28, borderRadius:14, background:a.bg, display:'flex', alignItems:'center', justifyContent:'center', fontSize:16, marginLeft:i>0?-8:0, border:'2px solid #000', zIndex:3-i, position:'relative' }}>{a.emoji}</div>
+          ))}
+        </div>
+        <span style={{ flex:1, fontSize:14, color:'#8E8E93' }}>{Math.max(people-3,0)} chatting...</span>
+        <button className="tap-feedback" style={{ background:'#2A2A2D', border:'none', borderRadius:20, padding:'8px 16px', fontSize:14, fontWeight:600, color:'#FFF', cursor:'pointer', fontFamily:'inherit' }}>
+          Join Chat
+        </button>
+      </div>
+
+      {/* Position */}
+      <div style={{ margin:'0 16px 16px' }}>
+        <div style={{ fontSize:17, fontWeight:700, color:'#FFF', marginBottom:10 }}>Position</div>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', paddingBottom:10, borderBottom:'1px solid rgba(255,255,255,0.05)', marginBottom:10 }}>
+          <div>
+            <div style={{ fontSize:12, color:'#8E8E93', marginBottom:6, fontWeight:400 }}>Balance</div>
+            <div style={{ fontSize:16, fontWeight:600, color:'#FFF' }}>{amount.toLocaleString('en-US',{minimumFractionDigits:5,maximumFractionDigits:5}).replace(/\.?0+$/,'')}</div>
+          </div>
+          <div style={{ textAlign:'right' }}>
+            <div style={{ fontSize:12, color:'#8E8E93', marginBottom:6 }}>Value</div>
+            <div style={{ fontSize:16, fontWeight:600, color:'#FFF' }}>${value.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+          </div>
+        </div>
+        <div style={{ display:'flex', justifyContent:'space-between', paddingTop:10, alignItems:'center' }}>
+          <span style={{ fontSize:14, color:'#8E8E93' }}>24h Return</span>
+          <span style={{ fontSize:14, fontWeight:600, color: dollarChange>=0?'#00DC82':'#FF453A' }}>
+            {(dollarChange>=0?'+$':'-$') + Math.abs(dollarChange).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}
+          </span>
+        </div>
+      </div>
+
+      {/* Perps Position - hidden when no active position */}
+      {amount > 0 && (
+      <div style={{ margin:'0 16px 16px' }}>
+        <div style={{ fontSize:17, fontWeight:700, color:'#FFF', marginBottom:10 }}>Perps Position</div>
+        <div style={{ background:'#1C1C1E', borderRadius:16, padding:'14px 16px', display:'flex', alignItems:'center', gap:12 }}>
+          <div style={{ width:44, height:44, borderRadius:22, background:'#2A2A2D', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#AB9FF2" strokeWidth="2"><path d="M18.178 8c5.096 0 5.096 8 0 8-5.095 0-7.133-8-12.739-8-4.585 0-4.585 8 0 8 5.606 0 7.644-8 12.74-8z"/></svg>
+          </div>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:15, fontWeight:600, color:'#FFF' }}>Trade {token.symbol} perp</div>
+            <div style={{ fontSize:13, color:'#8E8E93', marginTop:2 }}>Multiply your P&L up to 20×</div>
+          </div>
+        </div>
+      </div>
+      )}
+
+      {/* Your Stake */}
+      <div style={{ margin:'0 16px 16px' }}>
+        <div style={{ fontSize:17, fontWeight:700, color:'#FFF', marginBottom:10 }}>Your Stake</div>
+        <div style={{ background:'#1C1C1E', borderRadius:16, padding:'18px 16px' }}>
+          <div style={{ fontSize:13, color:'#8E8E93' }}>Stake with Phantom</div>
+          <div style={{ fontSize:20, fontWeight:700, color:'#FFF', marginTop:4 }}>
+            Earn <span style={{ color:'#00DC82' }}>6.88%</span> per year
+          </div>
+          <div style={{ height:50, margin:'12px 0', position:'relative' }}>
+            <svg width="100%" height="50" viewBox="0 0 300 50">
+              <path d="M0,40 C60,38 80,25 120,20 C160,15 180,10 240,8 C270,7 285,6 300,5" fill="none" stroke="#00DC82" strokeWidth="2" strokeDasharray="5 3"/>
+            </svg>
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginTop:4 }}>
+            <button className="tap-feedback" style={{ background:'#2A2A2D', border:'none', borderRadius:12, padding:'12px', fontSize:14, fontWeight:600, color:'#FFF', cursor:'pointer', fontFamily:'inherit' }}>Learn More</button>
+            <button className="tap-feedback" style={{ background:'#00DC82', border:'none', borderRadius:12, padding:'12px', fontSize:14, fontWeight:700, color:'#000', cursor:'pointer', fontFamily:'inherit' }}>Start Earning</button>
+          </div>
+        </div>
+      </div>
+
+      {/* 24h Performance */}
+      <div style={{ margin:'0 16px 16px' }}>
+        <div style={{ fontSize:17, fontWeight:700, color:'#FFF', marginBottom:10 }}>24h Performance</div>
+        <div style={{ background:'#1C1C1E', borderRadius:16, overflow:'hidden' }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'14px 16px', borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
+            <span style={{ fontSize:14, color:'#8E8E93' }}>Volume</span>
+            <span style={{ fontSize:14, fontWeight:600, color:'#FFF' }}>{mktData.volume} <span style={{ color:'#00DC82' }}>+15.27%</span></span>
+          </div>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'14px 16px' }}>
+            <span style={{ fontSize:14, color:'#8E8E93' }}>Traders</span>
+            <span style={{ fontSize:14, fontWeight:600, color:'#FFF' }}>{mktData.traders}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Info */}
+      <div style={{ margin:'0 16px 16px' }}>
+        <div style={{ fontSize:17, fontWeight:700, color:'#FFF', marginBottom:10 }}>Info</div>
+        <div style={{ background:'#1C1C1E', borderRadius:16, overflow:'hidden' }}>
+          {[
+            { label:'Name', value: token.name },
+            { label:'Symbol', value: token.symbol },
+            { label:'Network', value: 'Solana' },
+            { label:'Market Cap', value: mktData.marketCap },
+            { label:'Total Supply', value: mktData.supply },
+          ].map((row,i,arr) => (
+            <div key={row.label} style={{ display:'flex', justifyContent:'space-between', padding:'13px 16px', borderBottom: i<arr.length-1?'1px solid rgba(255,255,255,0.06)':'none' }}>
+              <span style={{ fontSize:14, color:'#8E8E93' }}>{row.label}</span>
+              <span style={{ fontSize:14, fontWeight:500, color:'#FFF' }}>{row.value}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* About */}
+      <div style={{ margin:'0 16px 32px' }}>
+        <div style={{ fontSize:17, fontWeight:700, color:'#FFF', marginBottom:10 }}>About</div>
+        <div style={{ background:'#1C1C1E', borderRadius:16, padding:'14px 16px' }}>
+          <div style={{ fontSize:14, color:'#8E8E93', lineHeight:1.6 }}>
+            {token.name} is a high-performance blockchain supporting developers around the world creating crypto apps that scale today.
+          </div>
+          <button className="tap-feedback" style={{ background:'none', border:'none', color:'#AB9FF2', fontSize:14, cursor:'pointer', marginTop:8, padding:0, fontFamily:'inherit' }}>Show More</button>
+        </div>
+      </div>
+
+      <div style={{ fontSize:12, color:'#6B7280', padding:'0 16px 24px', lineHeight:1.5 }}>
+        Past performance is not an indicator of future performance.
+      </div>
+
+      {/* Fixed Buy/Sell */}
+      <div style={{ position:'fixed', bottom:0, left:'50%', transform:'translateX(-50%)', width:'100%', maxWidth:430, padding:'12px 16px', paddingBottom:'calc(12px + env(safe-area-inset-bottom,0px))', background:'#000000', borderTop:'1px solid rgba(255,255,255,0.06)', display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, zIndex:200 }}>
+        <button onClick={()=>router.push(`/token/${id}/buy`)} className="tap-feedback" style={{ background:'#AB9FF2', border:'none', borderRadius:28, height:56, fontSize:17, fontWeight:700, color:'#000', cursor:'pointer', fontFamily:'inherit' }}>
+          Buy
+        </button>
+        <button onClick={()=>router.push(`/token/${id}/sell`)} className="tap-feedback" style={{ background:'rgba(171,159,242,0.2)', border:'1px solid rgba(171,159,242,0.4)', borderRadius:28, height:56, fontSize:17, fontWeight:700, color:'#AB9FF2', cursor:'pointer', fontFamily:'inherit' }}>
+          Sell
+        </button>
+      </div>
+    </div>
+  )
+}
+```
+
+---
+## app/send/page.tsx
+```
+'use client'
+import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
+import { TOKENS, fetchPrices, PricesMap, FALLBACK_PRICES } from '@/lib/coingecko'
+import { getTokenAmounts, WALLET_ADDRESS_SHORT, generateFakeTxHash } from '@/lib/storage'
+
+type Step = 'select' | 'form' | 'confirm' | 'sending' | 'done'
+
+export default function Send() {
+  const router = useRouter()
+  const [step, setStep] = useState<Step>('select')
+  const [toAddr, setToAddr] = useState('')
+  const [selectedToken, setSelectedToken] = useState(TOKENS[0])
+  const [amount, setAmount] = useState('')
+  const [prices, setPrices] = useState<PricesMap>(FALLBACK_PRICES)
+  const [amounts, setAmounts] = useState<Record<string, number>>({})
+  const [txHash, setTxHash] = useState('')
+  const [search, setSearch] = useState('')
+  const [showDetail, setShowDetail] = useState(false)
+
+  useEffect(() => {
+    setAmounts(getTokenAmounts())
+    fetchPrices().then(setPrices);
+    const _interval = setInterval(() => fetchPrices().then(setPrices), 30000);
+    return () => clearInterval(_interval)
+  }, [])
+
+  const price = prices[selectedToken.id]?.usd || 0
+  const numAmount = parseFloat(amount) || 0
+  const usdValue = numAmount * price
+  const networkFee = 0.000005
+  const balance = amounts[selectedToken.symbol] || 0
+
+  function confirmSend() {
+    setStep('sending')
+    setTimeout(() => {
+      setTxHash(generateFakeTxHash())
+      setStep('done')
+    }, 1800)
+  }
+
+  // Token Select step
+  if (step === 'select') {
+    const filtered = TOKENS.filter(t =>
+      t.name.toLowerCase().includes(search.toLowerCase()) ||
+      t.symbol.toLowerCase().includes(search.toLowerCase())
+    )
+    return (
+      <div style={{ background:'#000000', minHeight:'100vh', maxWidth:430, margin:'0 auto', padding:'10px 0 32px' }}>
+      
+        <div style={{ display:'flex', alignItems:'center', gap:12, padding:'0 16px 16px' }}>
+          <button onClick={()=>router.back()} className="tap-feedback" style={{ background:'none', border:'none', color:'#FFF', cursor:'pointer', padding:0, display:'flex' }}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+          <span style={{ fontSize:17, fontWeight:700, color:'#FFF', flex:1, textAlign:'center', marginRight:22 }}>Select Token</span>
+        </div>
+        <div style={{ padding:'0 16px 12px' }}>
+          <div style={{ background:'#1C1C1E', borderRadius:12, display:'flex', alignItems:'center', gap:8, padding:'10px 14px' }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8E8E93" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search..." style={{ background:'none', border:'none', outline:'none', color:'#FFF', fontSize:15, flex:1, fontFamily:'inherit' }}/>
+          </div>
+        </div>
+        <div>
+          {filtered.map(t => {
+            const bal = amounts[t.symbol] || 0
+            const p = prices[t.id]?.usd || 0
+            const val = bal * p
+            return (
+              <button key={t.symbol} onClick={()=>{ setSelectedToken(t); setStep('form') }} className="tap-feedback"
+                style={{ display:'flex', alignItems:'center', gap:12, width:'100%', padding:'12px 16px', background:'none', border:'none', cursor:'pointer', fontFamily:'inherit', borderBottom:'1px solid rgba(255,255,255,0.04)' }}>
+                <img src={t.logo} alt={t.symbol} style={{ width:44, height:44, borderRadius:22, background:'#2A2A2D' }}/>
+                <div style={{ flex:1, textAlign:'left' }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+                    <span style={{ fontSize:15, fontWeight:600, color:'#FFF' }}>{t.name}</span>
+                    <span style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:14, height:14, borderRadius:7, background:'#3B82F6' }}>
+                      <svg width="8" height="6" viewBox="0 0 9 7" fill="none"><path d="M1 3.5L3.5 6L8 1" stroke="#fff" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                    </span>
+                  </div>
+                  <div style={{ fontSize:13, color:'#8E8E93', marginTop:2 }}>{bal > 0 ? `${bal.toLocaleString()} ${t.symbol}` : `0 ${t.symbol}`}</div>
+                </div>
+                <div style={{ textAlign:'right' }}>
+                  <div style={{ fontSize:14, fontWeight:500, color:'#FFF' }}>${val.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
+
+  if (step === 'form') {
+    return (
+      <div style={{ background:'#000000', minHeight:'100vh', maxWidth:430, margin:'0 auto', padding:'10px 16px 32px' }}>
+        <div style={{ display:'flex', alignItems:'center', marginBottom:24, position:'relative' }}>
+          <button onClick={()=>setStep('select')} className="tap-feedback" style={{ background:'none', border:'none', color:'#FFF', cursor:'pointer', padding:0, display:'flex' }}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+          <span style={{ position:'absolute', left:'50%', transform:'translateX(-50%)', fontSize:17, fontWeight:700, color:'#FFF' }}>Send {selectedToken.symbol}</span>
+        </div>
+
+        {/* Token + Amount input */}
+        <div style={{ background:'#1C1C1E', borderRadius:16, padding:'16px', marginBottom:12 }}>
+          <div style={{ fontSize:13, color:'#8E8E93', marginBottom:10 }}>Amount</div>
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <img src={selectedToken.logo} alt={selectedToken.symbol} style={{ width:36, height:36, borderRadius:18 }}/>
+            <input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0"
+              style={{ flex:1, background:'none', border:'none', outline:'none', fontSize:32, fontWeight:700, color:'#FFF', fontFamily:'inherit' }}
+              inputMode="decimal"
+            />
+            <button onClick={()=>setAmount(balance.toString())} style={{ background:'#2A2A2D', border:'none', borderRadius:20, padding:'6px 12px', fontSize:13, color:'#AB9FF2', cursor:'pointer', fontFamily:'inherit' }}>MAX</button>
+          </div>
+          <div style={{ fontSize:13, color:'#8E8E93', marginTop:8 }}>
+            ≈ ${usdValue.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})} · Balance: {balance.toFixed(5)} {selectedToken.symbol}
+          </div>
+        </div>
+
+        {/* To address */}
+        <div style={{ background:'#1C1C1E', borderRadius:16, padding:'16px', marginBottom:20 }}>
+          <div style={{ fontSize:13, color:'#8E8E93', marginBottom:8 }}>To</div>
+          <input type="text" value={toAddr} onChange={e=>setToAddr(e.target.value)}
+            placeholder="Wallet address or .sol domain"
+            style={{ width:'100%', background:'none', border:'none', outline:'none', color:'#FFF', fontSize:15, fontFamily:'inherit' }}
+          />
+        </div>
+
+        <div style={{ background:'#1C1C1E', borderRadius:12, padding:'12px 16px', marginBottom:24, display:'flex', justifyContent:'space-between' }}>
+          <span style={{ fontSize:14, color:'#8E8E93' }}>Network Fee</span>
+          <span style={{ fontSize:14, color:'#FFF' }}>~{networkFee} {selectedToken.symbol}</span>
+        </div>
+
+        <button onClick={()=>{ if (toAddr && amount) setStep('confirm') }} className="tap-feedback" style={{
+          width:'100%', background: toAddr && amount ? '#AB9FF2' : '#2A2A2D',
+          color: toAddr && amount ? '#000' : '#8E8E93',
+          border:'none', borderRadius:16, padding:'16px',
+          fontSize:16, fontWeight:700, cursor:'pointer', fontFamily:'inherit',
+        }}>Review</button>
+      </div>
+    )
+  }
+
+  if (step === 'confirm') {
+    return (
+      <div style={{ background:'#000000', minHeight:'100vh', maxWidth:430, margin:'0 auto', padding:'10px 16px 32px' }}>
+        <div style={{ display:'flex', alignItems:'center', marginBottom:28, position:'relative' }}>
+          <button onClick={()=>setStep('form')} className="tap-feedback" style={{ background:'none', border:'none', color:'#AB9FF2', fontSize:15, cursor:'pointer', display:'flex', alignItems:'center', gap:4 }}>
+            <svg width="10" height="16" viewBox="0 0 10 17" fill="none"><path d="M9 1L1 8.5L9 16" stroke="#AB9FF2" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            Back
+          </button>
+          <span style={{ position:'absolute', left:'50%', transform:'translateX(-50%)', fontSize:17, fontWeight:700, color:'#FFF' }}>Confirm</span>
+        </div>
+
+        {/* Amount display */}
+        <div style={{ textAlign:'center', marginBottom:28 }}>
+          <div style={{ fontSize:42, fontWeight:700, color:'#FFF' }}>{numAmount} {selectedToken.symbol}</div>
+          <div style={{ fontSize:16, color:'#8E8E93', marginTop:4 }}>≈ ${usdValue.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+        </div>
+
+        <div style={{ background:'#1C1C1E', borderRadius:16, overflow:'hidden', marginBottom:16 }}>
+          {[
+            { label:'From', value: WALLET_ADDRESS_SHORT },
+            { label:'To', value: toAddr.length>12 ? toAddr.slice(0,6)+'...'+toAddr.slice(-4) : toAddr },
+            { label:'Network fee', value: `~${networkFee} ${selectedToken.symbol}` },
+          ].map((row,i,arr) => (
+            <div key={row.label} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'14px 16px', borderBottom: i<arr.length-1?'1px solid rgba(255,255,255,0.06)':'none' }}>
+              <span style={{ fontSize:14, color:'#8E8E93' }}>{row.label}</span>
+              <span style={{ fontSize:14, fontWeight:500, color:'#FFF' }}>{row.value}</span>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ background:'rgba(251,191,36,0.1)', borderRadius:12, padding:'12px 16px', marginBottom:24, display:'flex', gap:10 }}>
+          <span style={{ fontSize:16 }}>⚠️</span>
+          <span style={{ fontSize:13, color:'#FBBF24', lineHeight:1.5 }}>This transaction cannot be reversed. Double-check the recipient address.</span>
+        </div>
+
+        <button onClick={confirmSend} className="tap-feedback" style={{
+          width:'100%', background:'#AB9FF2', color:'#000',
+          border:'none', borderRadius:16, padding:'16px',
+          fontSize:16, fontWeight:700, cursor:'pointer', fontFamily:'inherit',
+        }}>Confirm &amp; Send</button>
+      </div>
+    )
+  }
+
+  if (step === 'sending') {
+    return (
+      <div style={{ background:'#000000', minHeight:'100vh', maxWidth:430, margin:'0 auto', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center' }}>
+        <svg className="spinner" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#AB9FF2" strokeWidth="2">
+          <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+        </svg>
+        <div style={{ marginTop:20, fontSize:16, color:'#8E8E93' }}>Sending transaction...</div>
+      </div>
+    )
+  }
+
+  const sentAt = new Date()
+  const sentAtStr = sentAt.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }) + ' at ' + sentAt.toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit', hour12:true }).toLowerCase()
+  const toAddrShort = toAddr ? toAddr.slice(0,4) + '...' + toAddr.slice(-4) : 'EC6f...33A4'
+  const feeAmt = (0.000005 + Math.random()*0.0001).toFixed(5)
+
+  if (showDetail) {
+    return (
+      <div style={{ background:'#000000', minHeight:'100vh', maxWidth:430, margin:'0 auto', display:'flex', flexDirection:'column', padding:'16px' }}>
+        {/* Header */}
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:24 }}>
+          <span style={{ fontSize:20, fontWeight:700, color:'#FFF' }}>Sent</span>
+          <button onClick={()=>router.push('/')} style={{ background:'none', border:'none', cursor:'pointer', color:'#8E8E93', padding:4 }}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        {/* Token icon */}
+        <div style={{ display:'flex', justifyContent:'center', marginBottom:16 }}>
+          <div style={{ position:'relative' }}>
+            <div style={{ width:72, height:72, borderRadius:36, background:'#000', border:'1px solid #333', display:'flex', alignItems:'center', justifyContent:'center', overflow:'hidden' }}>
+              <img src={selectedToken.logo} alt={selectedToken.symbol} style={{ width:52, height:52, borderRadius:26 }} onError={e=>{(e.target as HTMLImageElement).style.display='none'}}/>
+            </div>
+            <div style={{ position:'absolute', bottom:0, right:0, width:24, height:24, borderRadius:12, background:'#3B82F6', display:'flex', alignItems:'center', justifyContent:'center' }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="white"><path d="M22 2L11 13"/><path d="M22 2L15 22 11 13 2 9 22 2Z" fill="white"/></svg>
+            </div>
+          </div>
+        </div>
+        {/* Amount */}
+        <div style={{ textAlign:'center', marginBottom:28 }}>
+          <span style={{ fontSize:38, fontWeight:700, color:'#FFF' }}>-{numAmount || 0.001} {selectedToken.symbol}</span>
+        </div>
+        {/* Details card */}
+        <div style={{ background:'#1C1C1E', borderRadius:18, overflow:'hidden', marginBottom:'auto' }}>
+          {[
+            { label:'Date', value: sentAtStr },
+            { label:'Status', value:'Succeeded', green:true },
+            { label:'To', value: toAddrShort, copy:true },
+            { label:'Network', value: 'Solana' },
+            { label:'Network Fee', value: `-${feeAmt} ${selectedToken.symbol}` },
+          ].map((row, i, arr) => (
+            <div key={row.label} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'16px 20px', borderBottom: i < arr.length-1 ? '1px solid rgba(255,255,255,0.06)' : 'none' }}>
+              <span style={{ fontSize:15, color:'#8E8E93' }}>{row.label}</span>
+              <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                <span style={{ fontSize:15, fontWeight:500, color: row.green ? '#4ADE80' : '#FFF' }}>{row.value}</span>
+                {row.copy && (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8E8E93" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+        {/* View on Solscan */}
+        <div style={{ padding:'24px 0 8px' }}>
+          <button onClick={()=>router.push('/')} className="tap-feedback" style={{ width:'100%', background:'#AB9FF2', border:'none', borderRadius:28, padding:'18px', fontSize:16, fontWeight:600, color:'#000', cursor:'pointer', fontFamily:'inherit' }}>
+            View on Solscan
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // done - success screen
+  return (
+    <div style={{ background:'#000000', minHeight:'100vh', maxWidth:430, margin:'0 auto', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:'0 32px' }}>
+      {/* Green checkmark */}
+      <div style={{ width:80, height:80, borderRadius:40, background:'#4ADE80', display:'flex', alignItems:'center', justifyContent:'center', marginBottom:24 }}>
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+      </div>
+      <div style={{ fontSize:28, fontWeight:700, color:'#FFF', marginBottom:12 }}>Sent!</div>
+      <div style={{ fontSize:15, color:'#8E8E93', marginBottom:20, textAlign:'center', lineHeight:1.5 }}>
+        <span style={{ color:'#FFF', fontWeight:600 }}>{numAmount || 0.001} {selectedToken.symbol}</span> was successfully sent to {toAddrShort}
+      </div>
+      <button onClick={()=>setShowDetail(true)} style={{ background:'none', border:'none', cursor:'pointer', color:'#AB9FF2', fontSize:16, fontWeight:500, marginBottom:60, fontFamily:'inherit' }}>
+        View transaction
+      </button>
+      {/* Close button fixed at bottom */}
+      <div style={{ position:'fixed', bottom:32, left:'50%', transform:'translateX(-50%)', width:'calc(100% - 64px)', maxWidth:365 }}>
+        <button onClick={()=>router.push('/')} className="tap-feedback" style={{ width:'100%', background:'#2A2A2D', border:'none', borderRadius:28, padding:'18px', fontSize:16, fontWeight:600, color:'#FFF', cursor:'pointer', fontFamily:'inherit' }}>
+          Close
+        </button>
+      </div>
+    </div>
+  )
+}
+```
+
+---
+## app/receive/page.tsx
+```
+'use client'
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import dynamic from 'next/dynamic'
+import { WALLET_ADDRESS } from '@/lib/storage'
+import { TOKENS } from '@/lib/coingecko'
+
+const QRCode = dynamic(() => import('qrcode.react').then(m => m.QRCodeSVG), { ssr: false })
+
+export default function Receive() {
+  const router = useRouter()
+  const [copied, setCopied] = useState(false)
+  const [selectedToken, setSelectedToken] = useState(TOKENS[0])
+  const [showTokenPicker, setShowTokenPicker] = useState(false)
+
+  function copyAddress() {
+    navigator.clipboard?.writeText(WALLET_ADDRESS).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
+
+  const shortAddr = WALLET_ADDRESS.slice(0,6) + '...' + WALLET_ADDRESS.slice(-6)
+
+  return (
+    <div style={{ background:'#000000', minHeight:'100vh', maxWidth:430, margin:'0 auto', padding:'10px 0 32px' }}>
+      
+      {/* Header */}
+      <div style={{ display:'flex', alignItems:'center', padding:'0 16px 20px', position:'relative' }}>
+        <span style={{ position:'absolute', left:'50%', transform:'translateX(-50%)', fontSize:17, fontWeight:700, color:'#FFF' }}>
+          Receive {selectedToken.symbol}
+        </span>
+        <div style={{ flex:1 }}/>
+        <div style={{ display:'flex', gap:12 }}>
+          <button style={{ background:'none', border:'none', cursor:'pointer', color:'#8E8E93', padding:0, display:'flex' }}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          </button>
+          <button onClick={()=>router.back()} className="tap-feedback" style={{ background:'none', border:'none', cursor:'pointer', color:'#FFF', padding:0, display:'flex' }}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+      </div>
+
+      {/* Token picker */}
+      <div style={{ padding:'0 16px 20px' }}>
+        <button onClick={()=>setShowTokenPicker(!showTokenPicker)} className="tap-feedback" style={{
+          display:'flex', alignItems:'center', gap:8, background:'#1C1C1E', border:'none',
+          borderRadius:20, padding:'8px 14px', cursor:'pointer', fontFamily:'inherit',
+        }}>
+          <img src={selectedToken.logo} alt={selectedToken.symbol} style={{ width:22, height:22, borderRadius:11 }}/>
+          <span style={{ fontSize:15, fontWeight:600, color:'#FFF' }}>{selectedToken.symbol}</span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8E8E93" strokeWidth="2"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        {showTokenPicker && (
+          <>
+            <div onClick={()=>setShowTokenPicker(false)} style={{ position:'fixed', inset:0, zIndex:99 }}/>
+            <div style={{ position:'absolute', background:'#1C1C1E', borderRadius:16, padding:'6px 0', zIndex:100, minWidth:180, boxShadow:'0 12px 40px rgba(0,0,0,0.9)', marginTop:4 }}>
+              {TOKENS.slice(0,4).map(t => (
+                <button key={t.symbol} onClick={()=>{ setSelectedToken(t); setShowTokenPicker(false) }}
+                  style={{ display:'flex', alignItems:'center', gap:10, width:'100%', background:'none', border:'none', padding:'10px 16px', cursor:'pointer', fontFamily:'inherit' }}>
+                  <img src={t.logo} alt={t.symbol} style={{ width:28, height:28, borderRadius:14 }}/>
+                  <span style={{ fontSize:14, color:'#FFF' }}>{t.name}</span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* QR Code */}
+      <div style={{ display:'flex', justifyContent:'center', padding:'0 16px 24px' }}>
+        <div style={{ background:'#FFF', padding:20, borderRadius:24 }}>
+          <QRCode value={WALLET_ADDRESS} size={220} bgColor="#FFFFFF" fgColor="#000000"
+            imageSettings={{ src: selectedToken.logo, width:44, height:44, excavate:true }}
+          />
+        </div>
+      </div>
+
+      {/* Address */}
+      <div style={{ padding:'0 16px 20px', textAlign:'center' }}>
+        <div style={{ display:'inline-flex', alignItems:'center', gap:8, background:'#1C1C1E', borderRadius:12, padding:'10px 16px' }}>
+          <span style={{ fontSize:14, color:'#FFF', fontFamily:'monospace' }}>{shortAddr}</span>
+          <button onClick={copyAddress} style={{ background:'none', border:'none', cursor:'pointer', padding:0, color:'#8E8E93', display:'flex' }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+        </div>
+        <div style={{ fontSize:13, color:'#8E8E93', marginTop:10 }}>
+          Use this address to receive {selectedToken.name} only.
+        </div>
+      </div>
+
+      {/* Buttons */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, padding:'0 16px' }}>
+        <button onClick={copyAddress} className="tap-feedback" style={{
+          background: copied ? '#4ADE80' : '#1C1C1E',
+          border:'none', borderRadius:14, padding:'14px',
+          fontSize:15, fontWeight:600, color: copied?'#000':'#FFF',
+          cursor:'pointer', fontFamily:'inherit',
+        }}>
+          {copied ? '✓ Copied!' : 'Copy address'}
+        </button>
+        <button className="tap-feedback" style={{
+          background:'#1C1C1E', border:'none', borderRadius:14, padding:'14px',
+          fontSize:15, fontWeight:600, color:'#FFF', cursor:'pointer', fontFamily:'inherit',
+        }}>Share</button>
+      </div>
+    </div>
+  )
+}
+```
+
+---
+## app/swap/page.tsx
+```
+'use client'
+import { useState, useEffect } from 'react'
+import BottomNav from '@/components/BottomNav'
+import { TOKENS, fetchPrices, PricesMap, FALLBACK_PRICES, formatPrice } from '@/lib/coingecko'
+
+function PhantomAvatar() {
+  return (
+    <div style={{width:36,height:36,borderRadius:18,background:'#E8845C',display:'flex',alignItems:'center',justifyContent:'center',overflow:'hidden',flexShrink:0}}>
+      <svg viewBox="0 0 100 100" width="28" height="28">
+        <ellipse cx="50" cy="45" rx="28" ry="32" fill="white"/>
+        <path d="M22 65 Q30 80 38 65 Q46 80 54 65 Q62 80 70 65 Q75 55 78 45 Q78 10 50 10 Q22 10 22 45 Z" fill="white"/>
+        <circle cx="40" cy="40" r="5" fill="#1C1C1E"/>
+        <circle cx="60" cy="40" r="5" fill="#1C1C1E"/>
+        <path d="M38 55 Q50 63 62 55" stroke="#1C1C1E" strokeWidth="2.5" fill="none" strokeLinecap="round"/>
+      </svg>
+    </div>
+  )
+}
+
+function VerifiedBadge() {
+  return (
+    <span style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:14, height:14, borderRadius:7, background:'#3B82F6', flexShrink:0, marginLeft:4 }}>
+      <svg width="8" height="6" viewBox="0 0 9 7" fill="none"><path d="M1 3.5L3.5 6L8 1" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+    </span>
+  )
+}
+
+const TRENDING = [
+  { rank:1, rc:'#16A34A', name:'OILLESS', mc:'$650K MC', price:'$0.00067827', ch:'+9,458.76%', pos:true, color:'#F5A623' },
+  { rank:2, rc:'#8E8E93', name:'DMOON', mc:'$222K MC', price:'$0.00258216', ch:'+62.76%', pos:true, color:'#3EBD93', verified:true },
+  { rank:3, rc:'#FF453A', name:'XPD', mc:'$205K MC', price:'$0.00020562', ch:'-72.04%', pos:false, color:'#C084FC' },
+  { rank:4, rc:'', name:'WAR', mc:'$33M MC', price:'$0.033', ch:'+15.28%', pos:true, color:'#333', verified:true },
+  { rank:5, rc:'', name:'SiNX', mc:'$477K MC', price:'$0.00002785', ch:'-36.02%', pos:false, color:'#F97316' },
+  { rank:6, rc:'', name:'ORBIO', mc:'$73K MC', price:'$0.00000217', ch:'+165.54%', pos:true, color:'#6366F1' },
+  { rank:7, rc:'', name:'Nyan', mc:'$36K MC', price:'$0.00003609', ch:'+279.31%', pos:true, color:'#EC4899' },
+]
+
+export default function SwapPage() {
+  const [tab, setTab] = useState<'Tokens'|'Perps'>('Tokens')
+  const [prices, setPrices] = useState<PricesMap>(FALLBACK_PRICES)
+
+  useEffect(() => {
+    fetchPrices().then(setPrices)
+    const interval = setInterval(() => fetchPrices().then(setPrices), 30000)
+    return () => clearInterval(interval)
+  }, [])
+
+  const solPrice = prices['solana']?.usd || 0
+
+  return (
+    <div style={{ background:'#000', minHeight:'100vh', color:'#fff', fontFamily:'-apple-system,BlinkMacSystemFont,sans-serif', paddingBottom:80 }}>
+      {/* Header */}
+      <div style={{ padding:'16px 20px 0', display:'flex', alignItems:'center', gap:12 }}>
+        <PhantomAvatar/>
+        <div>
+          <div style={{ color:'#8E8E93', fontSize:13 }}>@NearHeath3094</div>
+          <div style={{ fontSize:22, fontWeight:700 }}>Swap</div>
+        </div>
+        <div style={{ marginLeft:'auto' }}>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round">
+            <line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/>
+            <circle cx="8" cy="6" r="2" fill="#fff"/><circle cx="16" cy="12" r="2" fill="#fff"/><circle cx="8" cy="18" r="2" fill="#fff"/>
+          </svg>
+        </div>
+      </div>
+
+      {/* You Pay */}
+      <div style={{ margin:'20px 16px 0', background:'#1C1C1E', borderRadius:16, padding:'16px 18px' }}>
+        <div style={{ color:'#8E8E93', fontSize:13, marginBottom:8 }}>You Pay</div>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <div style={{ fontSize:32, fontWeight:300, color:'#8E8E93' }}>0</div>
+          <div style={{ display:'flex', alignItems:'center', gap:6, background:'#2A2A2D', borderRadius:20, padding:'6px 12px 6px 8px' }}>
+            <img src="https://assets.coingecko.com/coins/images/4128/large/solana.png" alt="SOL" style={{width:24,height:24,borderRadius:12}}/>
+            <span style={{fontWeight:600,fontSize:15}}>SOL</span>
+            <VerifiedBadge/>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#8E8E93" strokeWidth="2"><path d="M3 5l3 3 3-3"/></svg>
+          </div>
+        </div>
+        <div style={{ display:'flex', justifyContent:'space-between', marginTop:8, alignItems:'center' }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8E8E93" strokeWidth="2" strokeLinecap="round"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
+          <span style={{ color:'#8E8E93', fontSize:13 }}>{solPrice > 0 ? `1 SOL ≈ ${formatPrice(solPrice)}` : '...'}</span>
+        </div>
+      </div>
+
+      {/* Swap direction */}
+      <div style={{ display:'flex', justifyContent:'center', margin:'-8px 0', position:'relative', zIndex:2 }}>
+        <div style={{ width:36, height:36, borderRadius:18, background:'#AB9FF2', display:'flex', alignItems:'center', justifyContent:'center' }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="2.5" strokeLinecap="round"><path d="M7 4v16m0 0l-3-3m3 3l3-3"/><path d="M17 20V4m0 0l3 3m-3-3l-3 3"/></svg>
+        </div>
+      </div>
+
+      {/* You Receive */}
+      <div style={{ margin:'0 16px', background:'#1C1C1E', borderRadius:16, padding:'16px 18px' }}>
+        <div style={{ color:'#8E8E93', fontSize:13, marginBottom:8 }}>You Receive</div>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <div style={{ fontSize:32, fontWeight:300, color:'#8E8E93' }}>0</div>
+          <div style={{ display:'flex', alignItems:'center', gap:6, background:'#2A2A2D', borderRadius:20, padding:'6px 12px 6px 8px' }}>
+            <div style={{width:24,height:24,borderRadius:12,background:"#F5C518",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,color:"#000"}}>$</div>
+            <span style={{fontWeight:600,fontSize:15}}>Cash</span>
+            <VerifiedBadge/>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#8E8E93" strokeWidth="2"><path d="M3 5l3 3 3-3"/></svg>
+          </div>
+        </div>
+        <div style={{ textAlign:'right', marginTop:4, color:'#8E8E93', fontSize:13 }}>$0.00</div>
+      </div>
+
+      {/* Tabs */}
+      <div style={{ padding:'24px 20px 12px', display:'flex', gap:20 }}>
+        <span onClick={()=>setTab('Tokens')} style={{ fontSize:20, fontWeight:700, cursor:'pointer', color: tab==='Tokens' ? '#fff' : '#8E8E93' }}>Tokens</span>
+        <span onClick={()=>setTab('Perps')} style={{ fontSize:20, fontWeight:700, cursor:'pointer', color: tab==='Perps' ? '#fff' : '#8E8E93' }}>Perps</span>
+      </div>
+
+      {/* Filters */}
+      <div style={{ padding:'0 20px 16px', display:'flex', gap:8 }}>
+        {['Rank','Solana','24h'].map(f=>(
+          <div key={f} style={{ background:'#1C1C1E', borderRadius:16, padding:'6px 12px', display:'flex', alignItems:'center', gap:4, fontSize:13, color:'#fff' }}>
+            {f}
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="#8E8E93" strokeWidth="1.5"><path d="M2 4l3 3 3-3"/></svg>
+          </div>
+        ))}
+      </div>
+
+      {/* Trending list */}
+      {TRENDING.map(t => (
+        <div key={t.name} style={{ padding:'12px 20px', display:'flex', alignItems:'center', gap:12 }}>
+          <div style={{ position:'relative', marginLeft: t.rank > 3 ? 12 : 0 }}>
+            {t.rank <= 3 ? (
+              <div style={{ position:'absolute', bottom:-4, left:-4, width:18, height:18, borderRadius:9, background:t.rc, fontSize:10, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center', zIndex:2, border:'2px solid #000' }}>{t.rank}</div>
+            ) : (
+              <span style={{ position:'absolute', left:-20, top:'50%', transform:'translateY(-50%)', fontSize:14, color:'#8E8E93' }}>{t.rank}</span>
+            )}
+            <div style={{ width:40, height:40, borderRadius:20, background:`linear-gradient(135deg, ${t.color}, ${t.color}88)`, display:'flex', alignItems:'center', justifyContent:'center' }}>
+              <span style={{ fontSize:14, fontWeight:700, color:'#fff' }}>{t.name.substring(0,2).toUpperCase()}</span>
+            </div>
+            <div style={{ position:'absolute', bottom:-4, right:-4, width:18, height:18, borderRadius:9, background:'linear-gradient(135deg,#9945FF,#14F195)', display:'flex', alignItems:'center', justifyContent:'center', border:'2px solid #000' }}>
+              <svg width="8" height="8" viewBox="0 0 12 12" fill="white"><rect x="2" y="3" width="8" height="1.5" rx="0.5"/><rect x="3" y="5.5" width="6" height="1.5" rx="0.5"/><rect x="2" y="8" width="8" height="1.5" rx="0.5"/></svg>
+            </div>
+          </div>
+          <div style={{ flex:1 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:2 }}>
+              <span style={{ fontWeight:600, fontSize:15 }}>{t.name}</span>
+              {t.verified && <VerifiedBadge/>}
+            </div>
+            <div style={{ color:'#8E8E93', fontSize:13 }}>{t.mc}</div>
+          </div>
+          <div style={{ textAlign:'right' }}>
+            <div style={{ fontSize:14, fontWeight:500 }}>{t.price}</div>
+            <div style={{ fontSize:13, color: t.pos ? '#3EBD93' : '#FF453A' }}>{t.ch}</div>
+          </div>
+        </div>
+      ))}
+
+      <BottomNav/>
+    </div>
+  )
+}
+```
+
+---
+## app/cash/page.tsx
+```
+'use client'
+import BottomNav from '@/components/BottomNav'
+
+function PhantomAvatar() {
+  return (
+    <div style={{width:36,height:36,borderRadius:18,background:'#E8845C',display:'flex',alignItems:'center',justifyContent:'center',overflow:'hidden',flexShrink:0}}>
+      <svg viewBox="0 0 100 100" width="28" height="28">
+        <ellipse cx="50" cy="45" rx="28" ry="32" fill="white"/>
+        <path d="M22 65 Q30 80 38 65 Q46 80 54 65 Q62 80 70 65 Q75 55 78 45 Q78 10 50 10 Q22 10 22 45 Z" fill="white"/>
+        <circle cx="40" cy="40" r="5" fill="#1C1C1E"/>
+        <circle cx="60" cy="40" r="5" fill="#1C1C1E"/>
+        <path d="M38 55 Q50 63 62 55" stroke="#1C1C1E" strokeWidth="2.5" fill="none" strokeLinecap="round"/>
+      </svg>
+    </div>
+  )
+}
+
+function VisaCard() {
+  return (
+    <div style={{
+      position:'absolute', top: -8, right: 0,
+      width: 140, height: 88, borderRadius: 14,
+      background: 'linear-gradient(135deg, #FF6B6B 0%, #FF8E53 15%, #FFD93D 28%, #6BCB77 42%, #4D96FF 58%, #845EC2 75%, #FF6B6B 100%)',
+      boxShadow: '0 8px 32px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.3)',
+      display:'flex', flexDirection:'column', justifyContent:'space-between', padding:'10px 12px', flexShrink: 0,
+    }}>
+      <div style={{width:28,height:20,borderRadius:4,background:'rgba(255,215,0,0.8)',border:'1px solid rgba(255,255,255,0.4)'}}/>
+      <div style={{fontSize:11,fontWeight:800,fontStyle:'italic',color:'white',textAlign:'right',letterSpacing:1,textShadow:'0 1px 2px rgba(0,0,0,0.5)'}}>VISA</div>
+    </div>
+  )
+}
+
+const TokenIcons = () => (
+  <div style={{ display:'flex', marginBottom:10 }}>
+    {[
+      { bg:'#F5A623', letter:'🐕' },
+      { bg:'#2775CA', letter:'$' },
+      { bg:'#9945FF', icon:true },
+    ].map((t, i) => (
+      <div key={i} style={{
+        width:34, height:34, borderRadius:17,
+        background: t.bg, border:'2px solid #1C1C1E',
+        marginLeft: i>0?-8:0, display:'flex', alignItems:'center',
+        justifyContent:'center', fontSize:14, color:'#fff', fontWeight:700, flexShrink:0,
+      }}>
+        {t.icon
+          ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2L6 8h3v8h-3l6 6 6-6h-3V8h3L12 2z" fill="white"/></svg>
+          : t.letter
+        }
+      </div>
+    ))}
+  </div>
+)
+
+export default function CashPage() {
+  return (
+    <div style={{ background:'#000000', minHeight:'100vh', maxWidth:430, margin:'0 auto', paddingBottom: 'calc(100px + env(safe-area-inset-bottom, 0px))', overflowY:'auto' }}>
+      
+      {/* Header */}
+      <div style={{ padding:'16px 16px 0', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <PhantomAvatar/>
+          <div>
+            <div style={{ fontSize:12, color:'#8E8E93' }}>@NearHeath3094</div>
+            <div style={{ fontSize:17, fontWeight:700, color:'#FFF' }}>Cash</div>
+          </div>
+        </div>
+        <button style={{ background:'none', border:'none', cursor:'pointer', color:'#FFF', padding:0, display:'flex' }}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/>
+          </svg>
+        </button>
+      </div>
+
+      {/* Balance + Visa Card */}
+      <div style={{ padding:'20px 16px 16px', position: 'relative', minHeight: '100px' }}>
+        <div>
+          <div style={{ fontSize:13, color:'#8E8E93', marginBottom:6 }}>Balance</div>
+          <div style={{ fontSize:40, fontWeight:700, color:'#FFF', letterSpacing:-1 }}>$0.00</div>
+        </div>
+        <VisaCard/>
+      </div>
+
+      {/* Waitlist Banner */}
+      <div style={{ margin:'0 16px 20px', borderRadius:16, overflow:'hidden', background:'linear-gradient(135deg, #3730A3 0%, #6D28D9 50%, #A78BFA 100%)', padding:'14px 16px', display:'flex', alignItems:'center', gap:14 }}>
+        <div style={{ width:44, height:30, borderRadius:6, background:'linear-gradient(135deg, #f472b6, #818cf8)', flexShrink:0, display:'flex', alignItems:'center', justifyContent:'center' }}>
+          <span style={{ fontSize:14 }}>💳</span>
+        </div>
+        <div>
+          <div style={{ fontSize:15, fontWeight:700, color:'#FFF' }}>Join the waitlist!</div>
+          <div style={{ fontSize:12, color:'rgba(255,255,255,0.8)', marginTop:2 }}>Access to Phantom Card &amp; more coming soon</div>
+        </div>
+      </div>
+
+      {/* Add cash heading */}
+      <div style={{ padding:'0 16px 14px' }}>
+        <div style={{ fontSize:20, fontWeight:700, color:'#FFF' }}>Add cash</div>
+      </div>
+
+      {/* Card 1: Quick Sell Crypto */}
+      <div style={{ margin:'0 16px 12px', background:'#1C1C1E', borderRadius:16, padding:'16px' }}>
+        <TokenIcons/>
+        <div style={{ fontSize:16, fontWeight:700, color:'#FFF' }}>Quick Sell Crypto</div>
+        <div style={{ fontSize:13, color:'#8E8E93', marginTop:3 }}>Instant · No fees on stablecoins</div>
+        <div style={{ marginTop:10, display:'inline-block', background:'#2A2A2D', borderRadius:20, padding:'5px 12px' }}>
+          <span style={{ fontSize:12, color:'#8E8E93' }}>No tokens to sell</span>
+        </div>
+      </div>
+
+      {/* Card 2: Bank or Debit Card */}
+      <div style={{ margin:'0 16px 12px', background:'#1C1C1E', borderRadius:16, padding:'16px' }}>
+        <div style={{ display:'flex', gap:8, marginBottom:10 }}>
+          {[
+            <svg key="b" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#8E8E93" strokeWidth="1.5"><path d="M3 21h18M3 10h18M5 6l7-3 7 3M4 10v11M20 10v11M8 14v3M12 14v3M16 14v3"/></svg>,
+            <svg key="c" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#8E8E93" strokeWidth="1.5"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>,
+          ].map((icon, i) => (
+            <div key={i} style={{ width:36, height:36, borderRadius:10, background:'#2A2A2D', display:'flex', alignItems:'center', justifyContent:'center' }}>{icon}</div>
+          ))}
+        </div>
+        <div style={{ fontSize:16, fontWeight:700, color:'#FFF' }}>Bank or Debit Card</div>
+        <div style={{ fontSize:13, color:'#8E8E93', marginTop:3 }}>Instant · No fees on bank transfers</div>
+        <div style={{ marginTop:10, display:'inline-flex', alignItems:'center', gap:5, background:'#2A2A2D', borderRadius:20, padding:'5px 12px' }}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8E8E93" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <span style={{ fontSize:12, color:'#8E8E93' }}>Coming Soon</span>
+        </div>
+      </div>
+
+      {/* Card 3: Direct Deposit */}
+      <div style={{ margin:'0 16px 12px', background:'#1C1C1E', borderRadius:16, padding:'16px' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
+          <div style={{ position:'relative', width:36, height:36 }}>
+            <div style={{ width:36, height:36, borderRadius:10, background:'#2A2A2D', display:'flex', alignItems:'center', justifyContent:'center' }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8E8E93" strokeWidth="1.5"><path d="M3 21h18M3 10h18M5 6l7-3 7 3M4 10v11M20 10v11M8 14v3M12 14v3M16 14v3"/></svg>
+            </div>
+            <div style={{ position:'absolute', bottom:-2, right:-2, width:14, height:14, borderRadius:7, overflow:'hidden', border:'1.5px solid #1C1C1E' }}>
+              <svg viewBox="0 0 20 14" width="14" height="10"><rect width="20" height="14" fill="#B22234"/><rect y="1.5" width="20" height="1.5" fill="white"/><rect y="4.5" width="20" height="1.5" fill="white"/><rect y="7.5" width="20" height="1.5" fill="white"/><rect y="10.5" width="20" height="1.5" fill="white"/><rect width="8" height="7.5" fill="#3C3B6E"/></svg>
+            </div>
+          </div>
+        </div>
+        <div style={{ fontSize:16, fontWeight:700, color:'#FFF' }}>Direct Deposit</div>
+        <div style={{ fontSize:13, color:'#8E8E93', marginTop:3 }}>1-3 days · Free</div>
+        <div style={{ marginTop:10, display:'inline-flex', alignItems:'center', gap:5, background:'#2A2A2D', borderRadius:20, padding:'5px 12px' }}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8E8E93" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <span style={{ fontSize:12, color:'#8E8E93' }}>Coming Soon</span>
+        </div>
+      </div>
+
+      <BottomNav/>
+    </div>
+  )
+}
+```
+
+---
+## app/buy/page.tsx
+```
+'use client'
+import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
+import { TOKENS, fetchPrices, PricesMap, FALLBACK_PRICES } from '@/lib/coingecko'
+
+const AMOUNTS = [50, 100, 250, 500]
+const PAYMENT_METHODS = [
+  { id:'debit', label:'Debit Card', sub:'Instant' },
+  { id:'bank', label:'Bank Transfer', sub:'1-3 days' },
+  { id:'crypto', label:'Crypto', sub:'Instant' },
+]
+
+const GET_STARTED_IDS = ['solana', 'usd-coin']
+const POPULAR_IDS = ['ethereum', 'bitcoin', 'dogwifcoin', 'bonk', 'jupiter-exchange-solana']
+
+export default function BuyPage() {
+  const router = useRouter()
+  const [step, setStep] = useState<'select' | 'amount' | 'processing' | 'done'>('select')
+  const [search, setSearch] = useState('')
+  const [selectedToken, setSelectedToken] = useState(TOKENS[0])
+  const [usdAmount, setUsdAmount] = useState('100')
+  const [prices, setPrices] = useState<PricesMap>(FALLBACK_PRICES)
+  const [paymentMethod, setPaymentMethod] = useState('debit')
+
+  useEffect(() => { fetchPrices().then(setPrices);
+    const _interval = setInterval(() => fetchPrices().then(setPrices), 30000);
+    return () => clearInterval(_interval) }, [])
+
+  const price = prices[selectedToken.id]?.usd || FALLBACK_PRICES[selectedToken.id]?.usd || 1
+  const tokenAmount = parseFloat(usdAmount) / price
+
+  const filteredAll = TOKENS.filter(t =>
+    t.name.toLowerCase().includes(search.toLowerCase()) ||
+    t.symbol.toLowerCase().includes(search.toLowerCase())
+  )
+  const getStartedTokens = TOKENS.filter(t => GET_STARTED_IDS.includes(t.id))
+  const popularTokens = TOKENS.filter(t => POPULAR_IDS.includes(t.id))
+  const availableTokens = TOKENS.filter(t => !GET_STARTED_IDS.includes(t.id) && !POPULAR_IDS.includes(t.id))
+
+  function selectToken(token: typeof TOKENS[0]) {
+    setSelectedToken(token)
+    setStep('amount')
+  }
+
+  function handleBuy() {
+    setStep('processing')
+    setTimeout(() => setStep('done'), 1800)
+  }
+
+  if (step === 'done') {
+    return (
+      <div style={{ background:'#000', minHeight:'100vh', maxWidth:430, margin:'0 auto', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:'0 32px' }}>
+        <div style={{ width:72, height:72, borderRadius:36, background:'#4ADE8020', display:'flex', alignItems:'center', justifyContent:'center', marginBottom:20 }}>
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#4ADE80" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+        </div>
+        <div style={{ fontSize:22, fontWeight:700, color:'#FFF', marginBottom:8 }}>Purchase Successful!</div>
+        <div style={{ fontSize:15, color:'#8E8E93', marginBottom:4 }}>You bought {tokenAmount.toFixed(6)} {selectedToken.symbol}</div>
+        <div style={{ fontSize:14, color:'#8E8E93', marginBottom:32 }}>for ${usdAmount}</div>
+        <button onClick={()=>router.push('/')} className="tap-feedback" style={{ width:'100%', background:'#AB9FF2', color:'#000', border:'none', borderRadius:16, padding:'16px', fontSize:16, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>Done</button>
+      </div>
+    )
+  }
+
+  if (step === 'processing') {
+    return (
+      <div style={{ background:'#000', minHeight:'100vh', maxWidth:430, margin:'0 auto', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center' }}>
+        <svg className="spinner" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#AB9FF2" strokeWidth="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+        <div style={{ marginTop:20, fontSize:16, color:'#8E8E93' }}>Processing purchase...</div>
+      </div>
+    )
+  }
+
+  if (step === 'amount') {
+    return (
+      <div style={{ background:'#000000', minHeight:'100vh', maxWidth:430, margin:'0 auto', padding:'10px 16px 32px', overflowY:'auto' }}>
+        <div style={{ display:'flex', alignItems:'center', marginBottom:24, position:'relative' }}>
+          <button onClick={()=>setStep('select')} className="tap-feedback" style={{ background:'none', border:'none', color:'#FFF', cursor:'pointer', padding:0, display:'flex' }}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M15 18l-6-6 6-6"/></svg>
+          </button>
+          <span style={{ position:'absolute', left:'50%', transform:'translateX(-50%)', fontSize:17, fontWeight:700, color:'#FFF' }}>Buy {selectedToken.symbol}</span>
+        </div>
+        <div style={{ background:'#1C1C1E', borderRadius:16, padding:'20px 16px', marginBottom:12 }}>
+          <div style={{ fontSize:13, color:'#8E8E93', marginBottom:10 }}>You Pay (USD)</div>
+          <div style={{ display:'flex', alignItems:'center' }}>
+            <span style={{ fontSize:36, fontWeight:700, color:'#8E8E93', marginRight:4 }}>$</span>
+            <input type="number" value={usdAmount} onChange={e=>setUsdAmount(e.target.value)}
+              style={{ flex:1, background:'none', border:'none', outline:'none', fontSize:36, fontWeight:700, color:'#FFF', fontFamily:'inherit' }}
+              inputMode="decimal"
+            />
+          </div>
+          <div style={{ fontSize:14, color:'#8E8E93', marginTop:8 }}>
+            ≈ {tokenAmount > 0 ? tokenAmount.toFixed(6) : '0'} {selectedToken.symbol}
+          </div>
+        </div>
+        <div style={{ display:'flex', gap:8, marginBottom:20 }}>
+          {AMOUNTS.map(a => (
+            <button key={a} onClick={()=>setUsdAmount(String(a))} className="tap-feedback" style={{
+              flex:1, background: usdAmount===String(a)?'#AB9FF2':'#1C1C1E',
+              border:'none', borderRadius:20, padding:'8px 0',
+              fontSize:14, fontWeight:600, color: usdAmount===String(a)?'#000':'#FFF',
+              cursor:'pointer', fontFamily:'inherit',
+            }}>${a}</button>
+          ))}
+        </div>
+        <div style={{ marginBottom:20 }}>
+          <div style={{ fontSize:13, color:'#8E8E93', marginBottom:10 }}>Payment Method</div>
+          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+            {PAYMENT_METHODS.map(pm => (
+              <button key={pm.id} onClick={()=>setPaymentMethod(pm.id)} className="tap-feedback" style={{
+                display:'flex', alignItems:'center', gap:12, background:'#1C1C1E',
+                border: paymentMethod===pm.id?'1.5px solid #AB9FF2':'1.5px solid transparent',
+                borderRadius:14, padding:'14px 16px', cursor:'pointer', fontFamily:'inherit',
+              }}>
+                <div style={{ flex:1, textAlign:'left' }}>
+                  <div style={{ fontSize:15, fontWeight:600, color:'#FFF' }}>{pm.label}</div>
+                  <div style={{ fontSize:13, color:'#8E8E93' }}>{pm.sub}</div>
+                </div>
+                {paymentMethod===pm.id && (
+                  <div style={{ width:20, height:20, borderRadius:10, background:'#AB9FF2', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                    <svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4L3.5 6.5L9 1" stroke="#000" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                  </div>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+        <button onClick={handleBuy} className="tap-feedback" style={{
+          width:'100%', background: parseFloat(usdAmount)>0?'#AB9FF2':'#2A2A2D',
+          color: parseFloat(usdAmount)>0?'#000':'#8E8E93',
+          border:'none', borderRadius:16, padding:'16px',
+          fontSize:16, fontWeight:700, cursor:'pointer', fontFamily:'inherit',
+        }}>Buy {selectedToken.symbol}</button>
+      </div>
+    )
+  }
+
+  // Select Token step
+  return (
+    <div style={{ background:'#000000', minHeight:'100vh', maxWidth:430, margin:'0 auto', padding:'10px 0 32px', overflowY:'auto' }}>
+      <div style={{ display:'flex', alignItems:'center', padding:'0 16px 16px', position:'relative' }}>
+        <span style={{ position:'absolute', left:'50%', transform:'translateX(-50%)', fontSize:17, fontWeight:700, color:'#FFF' }}>Select Token</span>
+        <div style={{ flex:1 }}/>
+        <div style={{ display:'flex', gap:12 }}>
+          <button style={{ background:'none', border:'none', cursor:'pointer', color:'#8E8E93', padding:0, display:'flex' }}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          </button>
+          <button onClick={()=>router.back()} className="tap-feedback" style={{ background:'none', border:'none', cursor:'pointer', color:'#FFF', padding:0, display:'flex' }}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div style={{ padding:'0 16px 20px' }}>
+        <div style={{ background:'#1C1C1E', borderRadius:12, display:'flex', alignItems:'center', gap:10, padding:'12px 14px' }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8E8E93" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search" style={{ background:'none', border:'none', outline:'none', color:'#FFF', fontSize:16, flex:1, fontFamily:'inherit' }}/>
+        </div>
+      </div>
+
+      {!search && (
+        <>
+          <div style={{ padding:'0 16px 20px' }}>
+            <div style={{ fontSize:15, fontWeight:600, color:'#4ADE80', marginBottom:12 }}>Get started</div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+              {getStartedTokens.map(t => (
+                <button key={t.id} onClick={()=>selectToken(t)} className="tap-feedback" style={{
+                  background:'#1C1C1E', border:'none', borderRadius:14, padding:'14px 16px',
+                  display:'flex', alignItems:'center', gap:10, cursor:'pointer', fontFamily:'inherit', textAlign:'left',
+                }}>
+                  <img src={t.logo} alt={t.symbol} style={{ width:36, height:36, borderRadius:18, background:'#2A2A2D', flexShrink:0 }}/>
+                  <div>
+                    <div style={{ fontSize:15, fontWeight:600, color:'#FFF' }}>{t.name}</div>
+                    <div style={{ fontSize:13, color:'#8E8E93' }}>{t.symbol}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ padding:'0 16px 20px' }}>
+            <div style={{ fontSize:15, fontWeight:600, color:'#4ADE80', marginBottom:12 }}>Popular tokens</div>
+            <div style={{ background:'#1C1C1E', borderRadius:16, overflow:'hidden' }}>
+              {popularTokens.map((t, i) => (
+                <button key={t.id} onClick={()=>selectToken(t)} className="tap-feedback" style={{
+                  display:'flex', alignItems:'center', gap:12, width:'100%', background:'none', border:'none',
+                  padding:'14px 16px', cursor:'pointer', fontFamily:'inherit', textAlign:'left',
+                  borderBottom: i < popularTokens.length-1 ? '1px solid rgba(255,255,255,0.06)' : 'none',
+                }}>
+                  <img src={t.logo} alt={t.symbol} style={{ width:40, height:40, borderRadius:20, background:'#2A2A2D', flexShrink:0 }}/>
+                  <div>
+                    <div style={{ fontSize:15, fontWeight:600, color:'#FFF' }}>{t.name}</div>
+                    <div style={{ fontSize:13, color:'#8E8E93' }}>{t.symbol}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {availableTokens.length > 0 && (
+            <div style={{ padding:'0 16px 20px' }}>
+              <div style={{ fontSize:15, fontWeight:600, color:'#4ADE80', marginBottom:12 }}>Available tokens</div>
+              <div style={{ background:'#1C1C1E', borderRadius:16, overflow:'hidden' }}>
+                {availableTokens.map((t, i) => (
+                  <button key={t.id} onClick={()=>selectToken(t)} className="tap-feedback" style={{
+                    display:'flex', alignItems:'center', gap:12, width:'100%', background:'none', border:'none',
+                    padding:'14px 16px', cursor:'pointer', fontFamily:'inherit', textAlign:'left',
+                    borderBottom: i < availableTokens.length-1 ? '1px solid rgba(255,255,255,0.06)' : 'none',
+                  }}>
+                    <img src={t.logo} alt={t.symbol} style={{ width:40, height:40, borderRadius:20, background:'#2A2A2D', flexShrink:0 }}/>
+                    <div>
+                      <div style={{ fontSize:15, fontWeight:600, color:'#FFF' }}>{t.name}</div>
+                      <div style={{ fontSize:13, color:'#8E8E93' }}>{t.symbol}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {search && (
+        <div style={{ padding:'0 16px 20px' }}>
+          <div style={{ background:'#1C1C1E', borderRadius:16, overflow:'hidden' }}>
+            {filteredAll.length === 0 && (
+              <div style={{ padding:'20px', textAlign:'center', color:'#8E8E93' }}>No tokens found</div>
+            )}
+            {filteredAll.map((t, i) => (
+              <button key={t.id} onClick={()=>selectToken(t)} className="tap-feedback" style={{
+                display:'flex', alignItems:'center', gap:12, width:'100%', background:'none', border:'none',
+                padding:'14px 16px', cursor:'pointer', fontFamily:'inherit', textAlign:'left',
+                borderBottom: i < filteredAll.length-1 ? '1px solid rgba(255,255,255,0.06)' : 'none',
+              }}>
+                <img src={t.logo} alt={t.symbol} style={{ width:40, height:40, borderRadius:20, background:'#2A2A2D', flexShrink:0 }}/>
+                <div>
+                  <div style={{ fontSize:15, fontWeight:600, color:'#FFF' }}>{t.name}</div>
+                  <div style={{ fontSize:13, color:'#8E8E93' }}>{t.symbol}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+```
+
+---
+## app/explore/page.tsx
+```
+'use client'
+import { useState } from 'react'
+import BottomNav from '@/components/BottomNav'
+
+const CATEGORIES = [
+  { label:'Tokens', color:'#4ADE80', icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="#4ADE80"><circle cx="12" cy="12" r="10"/><text x="12" y="16" textAnchor="middle" fontSize="10" fill="#000" fontWeight="700">$</text></svg> },
+  { label:'Perps',  color:'#A78BFA', icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#A78BFA" strokeWidth="2"><path d="M18.178 8c5.096 0 5.096 8 0 8-5.095 0-7.133-8-12.739-8-4.585 0-4.585 8 0 8 5.606 0 7.644-8 12.74-8z"/></svg> },
+  { label:'Lists',  color:'#34D399', icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#34D399" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg> },
+  { label:'People', color:'#FBBF24', icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FBBF24" strokeWidth="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> },
+  { label:'Sites',  color:'#22D3EE', icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22D3EE" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg> },
+]
+
+const TRENDING_TOKENS = [
+  { rank:1, rankColor:'#16A34A', name:'OILLESS', mc:'$650K MC', price:'$0.00067827', change:'+9,458.76%', pos:true, color:'#F5A623' },
+  { rank:2, rankColor:'#16A34A', name:'DMOON',   mc:'$222K MC',  price:'$0.00258216', change:'+62.76%',   pos:true, color:'#16A34A', verified:true },
+  { rank:3, rankColor:'#DC2626', name:'XPD',     mc:'$205K MC',  price:'$0.00020562', change:'-72.04%',   pos:false,color:'#6B7280' },
+  { rank:4, rankColor:'',        name:'WAR',     mc:'$33M MC',   price:'$0.033',      change:'+15.28%',   pos:true, color:'#DC2626', verified:true },
+  { rank:5, rankColor:'',        name:'SiNX',    mc:'$477K MC',  price:'$0.0000278',  change:'-36.02%',   pos:false,color:'#F97316' },
+]
+
+const TRENDING_PERPS = [
+  { name:'CRCL',  vol:'$1.2M', change:'+18.4%', pos:true },
+  { name:'SNDK',  vol:'$890K', change:'+12.1%', pos:true },
+  { name:'MSTR',  vol:'$2.1M', change:'+8.7%',  pos:true },
+]
+
+const TOP_LISTS = [
+  { emoji:'📈', name:'Top Gainers', count:'7 tokens' },
+  { emoji:'🐸', name:'Meme',        count:'100 tokens' },
+  { emoji:'📉', name:'Top Losers',  count:'7 tokens' },
+]
+
+export default function ExplorePage() {
+  const [query, setQuery] = useState('')
+  const [activeCategory, setActiveCategory] = useState('Tokens')
+
+  return (
+    <div style={{ background:'#000000', minHeight:'100vh', maxWidth:430, margin:'0 auto', paddingBottom: 'calc(100px + env(safe-area-inset-bottom, 0px))', overflowY:'auto' }}>
+      
+      {/* Header */}
+      <div style={{ padding:'10px 16px 12px', display:'flex', alignItems:'center', gap:10 }}>
+        <div style={{ width:36, height:36, borderRadius:'50%', background:'#E8845C', display:'flex', alignItems:'center', justifyContent:'center', overflow:'hidden' }}>
+          <svg viewBox="0 0 40 40" width="24" height="24" fill="white">
+            <path d="M20 8c-3 0-5.5 2-6.5 5 2-1 4.5-1.5 6.5-1.5s4.5.5 6.5 1.5C25.5 10 23 8 20 8z"/>
+            <ellipse cx="20" cy="22" rx="8" ry="10"/>
+          </svg>
+        </div>
+        <div style={{ flex:1, background:'#1C1C1E', borderRadius:12, display:'flex', alignItems:'center', gap:8, padding:'10px 14px' }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8E8E93" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Sites, tokens, URL" style={{ background:'none', border:'none', outline:'none', color:'#FFF', fontSize:15, flex:1, fontFamily:'inherit' }} />
+        </div>
+        <button style={{ background:'#1C1C1E', border:'none', cursor:'pointer', color:'#FFF', padding:0, display:'flex', alignItems:'center', justifyContent:'center', width:34, height:34, borderRadius:17 }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+      </div>
+
+      {/* Category Pills */}
+      <div style={{ display:'flex', gap:8, padding:'0 16px 16px', overflowX:'auto', scrollbarWidth:'none' }}>
+        {CATEGORIES.map(cat => (
+          <button key={cat.label} onClick={()=>setActiveCategory(cat.label)} style={{
+            display:'flex', alignItems:'center', gap:6, flexShrink:0,
+            background: activeCategory===cat.label ? '#1C1C1E' : '#1C1C1E',
+            border: activeCategory===cat.label ? `1.5px solid ${cat.color}` : '1.5px solid transparent',
+            borderRadius:20, padding:'7px 14px', cursor:'pointer', fontFamily:'inherit',
+          }}>
+            {cat.icon}
+            <span style={{ fontSize:12, fontWeight:activeCategory===cat.label?600:400, color: activeCategory===cat.label ? "#FFF" : "#8E8E93", whiteSpace:"nowrap" }}>{cat.label}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Trending Tokens */}
+      <div style={{ padding:'0 16px 16px' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+          <span style={{ fontSize:17, fontWeight:700, color:'#FFF' }}>Trending Tokens</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8E8E93" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
+        </div>
+        <div style={{ background:'#1C1C1E', borderRadius:16, overflow:'hidden' }}>
+          {TRENDING_TOKENS.map((t, i) => (
+            <div key={t.name} style={{ display:'flex', alignItems:'center', gap:10, padding:'12px 16px', borderBottom: i<TRENDING_TOKENS.length-1?'1px solid rgba(255,255,255,0.05)':'none', cursor:'pointer' }}>
+              {t.rankColor
+                ? <div style={{ width:20, height:20, borderRadius:10, background:t.rankColor, display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, fontWeight:700, color:'#fff', flexShrink:0 }}>{t.rank}</div>
+                : <span style={{ width:20, fontSize:13, color:'#8E8E93', textAlign:'center', flexShrink:0, fontWeight:500 }}>{t.rank}</span>
+              }
+              <div style={{ width:36, height:36, borderRadius:18, background:t.color, display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, color:'#fff', fontWeight:700, flexShrink:0 }}>
+                {t.name.charAt(0)}
+              </div>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+                  <span style={{ fontSize:14, fontWeight:600, color:'#FFF' }}>{t.name}</span>
+                  {t.verified && (
+                    <span style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:14, height:14, borderRadius:7, background:'#3B82F6' }}>
+                      <svg width="8" height="6" viewBox="0 0 9 7" fill="none"><path d="M1 3.5L3.5 6L8 1" stroke="#fff" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                    </span>
+                  )}
+                </div>
+                <div style={{ fontSize:12, color:'#8E8E93', marginTop:1 }}>{t.mc}</div>
+              </div>
+              <div style={{ textAlign:'right', flexShrink:0 }}>
+                <div style={{ fontSize:13, fontWeight:500, color:'#FFF' }}>{t.price}</div>
+                <div style={{ fontSize:12, color: t.pos?'#4ADE80':'#FF453A', marginTop:1 }}>{t.change}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Trending Perps */}
+      <div style={{ padding:'0 16px 16px' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+          <span style={{ fontSize:17, fontWeight:700, color:'#FFF' }}>Trending Perps</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8E8E93" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
+        </div>
+        <div style={{ background:'#1C1C1E', borderRadius:16, overflow:'hidden' }}>
+          {TRENDING_PERPS.map((t, i) => (
+            <div key={t.name} style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 16px', borderBottom: i<TRENDING_PERPS.length-1?'1px solid rgba(255,255,255,0.05)':'none', cursor:'pointer' }}>
+              <div style={{ width:36, height:36, borderRadius:18, background:'#2A2A2D', display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, fontWeight:700, color:'#AB9FF2', flexShrink:0 }}>
+                {t.name.slice(0,2)}
+              </div>
+              <div style={{ flex:1 }}>
+                <span style={{ fontSize:14, fontWeight:600, color:'#FFF' }}>{t.name}</span>
+                <div style={{ fontSize:12, color:'#8E8E93', marginTop:1 }}>{t.vol} vol</div>
+              </div>
+              <div style={{ display:'flex', alignItems:'center', gap:8, flexShrink:0 }}>
+                <div style={{ background:'#2A2A2D', borderRadius:20, padding:'3px 8px', fontSize:11, color:'#8E8E93' }}>10x</div>
+                <span style={{ fontSize:13, color: t.pos?'#4ADE80':'#FF453A', fontWeight:600 }}>{t.change}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Top Lists */}
+      <div style={{ padding:'0 16px 16px' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+          <span style={{ fontSize:17, fontWeight:700, color:'#FFF' }}>Top Lists</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8E8E93" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
+        </div>
+        <div style={{ display:'flex', gap:10 }}>
+          {TOP_LISTS.map(l => (
+            <div key={l.name} style={{ flex:1, background:'#1C1C1E', borderRadius:14, padding:'14px 12px', cursor:'pointer' }}>
+              <div style={{ fontSize:24, marginBottom:8 }}>{l.emoji}</div>
+              <div style={{ fontSize:13, fontWeight:600, color:'#FFF' }}>{l.name}</div>
+              <div style={{ fontSize:11, color:'#8E8E93', marginTop:2 }}>{l.count}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <BottomNav/>
+    </div>
+  )
+}
+```
+
+---
+## app/chat/page.tsx
+```
+'use client'
+import BottomNav from '@/components/BottomNav'
+
+function PhantomAvatar() {
+  return (
+    <div style={{ width:44, height:44, borderRadius:22, background:'#E8845C', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, overflow:'hidden' }}>
+      <svg width="28" height="28" viewBox="0 0 40 40" fill="none">
+        <ellipse cx="20" cy="22" rx="13" ry="14" fill="white"/>
+        <circle cx="14" cy="19" r="3" fill="#1a0a2e"/>
+        <circle cx="26" cy="19" r="3" fill="#1a0a2e"/>
+        <path d="M13 28 Q20 33 27 28" stroke="#1a0a2e" strokeWidth="1.5" strokeLinecap="round" fill="none"/>
+        <path d="M7 8 Q20 0 33 8 Q33 22 27 28 Q26 30 24 28 Q22 26 20 28 Q18 30 16 28 Q13 26 7 22 Z" fill="white"/>
+      </svg>
+    </div>
+  )
+}
+
+const TRENDING = [
+  { name:'OILLESS', mc:'$669K MC', people:52, color:'#F5A623', letter:'O' },
+  { name:'WAR',     mc:'$33M MC',  people:49, color:'#DC2626', letter:'W' },
+  { name:'PAW',     mc:'$2.9M MC', people:28, color:'#3B82F6', letter:'🐾' },
+]
+
+export default function ChatPage() {
+  return (
+    <div style={{ background:'#000000', minHeight:'100vh', maxWidth:430, margin:'0 auto', paddingBottom: 'calc(100px + env(safe-area-inset-bottom, 0px))', overflowY:'auto' }}>
+      
+      {/* Header */}
+      <div style={{ padding:'10px 16px 20px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <PhantomAvatar/>
+          <div>
+            <div style={{ fontSize:12, color:'#8E8E93' }}>@NearHeath3094</div>
+            <div style={{ fontSize:17, fontWeight:700, color:'#FFF' }}>Chats</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Trending */}
+      <div style={{ padding:'0 16px 16px' }}>
+        <div style={{ fontSize:20, fontWeight:700, color:'#FFF', marginBottom:12 }}>Trending</div>
+        <div style={{ background:'#1C1C1E', borderRadius:16, overflow:'hidden' }}>
+          {TRENDING.map((t, i) => (
+            <div key={t.name} style={{
+              display:'flex', alignItems:'center', gap:12, padding:'14px 16px',
+              borderBottom: i < TRENDING.length-1 ? '1px solid rgba(255,255,255,0.06)' : 'none',
+              cursor:'pointer',
+            }}>
+              <div style={{ width:42, height:42, borderRadius:21, background:t.color, display:'flex', alignItems:'center', justifyContent:'center', fontSize:18, color:'#fff', fontWeight:700, flexShrink:0 }}>
+                {t.letter}
+              </div>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:15, fontWeight:600, color:'#FFF' }}>{t.name}</div>
+                <div style={{ fontSize:13, color:'#8E8E93', marginTop:2 }}>{t.mc}</div>
+              </div>
+              <div style={{ display:'flex', alignItems:'center', gap:5, flexShrink:0 }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8E8E93" strokeWidth="1.8"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                <span style={{ fontSize:14, color:'#8E8E93' }}>{t.people}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Recent */}
+      <div style={{ padding:'0 16px' }}>
+        <div style={{ fontSize:20, fontWeight:700, color:'#FFF', marginBottom:20 }}>Recent</div>
+        <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', paddingTop:40, gap:16 }}>
+          {/* Empty state crossed swords icon */}
+          <svg width="72" height="72" viewBox="0 0 72 72" fill="none">
+            <line x1="15" y1="15" x2="57" y2="57" stroke="#3A3A3C" strokeWidth="5" strokeLinecap="round"/>
+            <line x1="57" y1="15" x2="15" y2="57" stroke="#3A3A3C" strokeWidth="5" strokeLinecap="round"/>
+            <rect x="10" y="8" width="8" height="20" rx="2" fill="#3A3A3C" transform="rotate(-45 10 8)"/>
+            <rect x="54" y="8" width="8" height="20" rx="2" fill="#3A3A3C" transform="rotate(45 54 8)"/>
+          </svg>
+          <div style={{ fontSize:15, color:'#8E8E93' }}>No chats to show yet.</div>
+        </div>
+      </div>
+
+      <BottomNav/>
+    </div>
+  )
+}
+```
+
+---
+## app/activity/page.tsx
+```
+'use client'
+import { useState } from 'react'
+import BottomNav from '@/components/BottomNav'
+
+type TxType = 'received' | 'sent' | 'swap'
+
+interface Transaction {
+  id: string
+  type: TxType
+  title: string
+  desc: string
+  amount: string
+  usdAmount: string
+  time: string
+  date: string
+  token: string
+  logo: string
+  txHash: string
+  from?: string
+  to?: string
+}
+
+const TXS: Transaction[] = [
+  {
+    id: '1', type: 'received', title: 'Received SOL', desc: 'from 9WzD...3mPQ',
+    amount: '+2.4817 SOL', usdAmount: '+$447.32', time: '2 hours ago', date: 'Mar 10, 2026 at 12:34 pm',
+    token: 'SOL', logo: 'https://assets.coingecko.com/coins/images/4128/large/solana.png',
+    txHash: '4sGjM...vR2nK', from: '9WzDk8qP2LmN3mPQ',
+  },
+  {
+    id: '2', type: 'sent', title: 'Sent USDC', desc: 'to 4Fk2...8nLM',
+    amount: '-150.00 USDC', usdAmount: '-$150.00', time: '5 hours ago', date: 'Mar 10, 2026 at 9:12 am',
+    token: 'USDC', logo: 'https://assets.coingecko.com/coins/images/6319/large/usdc.png',
+    txHash: '2kPxN...bQ7mT', to: '4Fk2rY9sHj3v8nLM',
+  },
+  {
+    id: '3', type: 'swap', title: 'Swapped SOL → USDC', desc: '1.5 SOL for 270.45 USDC',
+    amount: '+270.45 USDC', usdAmount: '$270.45', time: '1 day ago', date: 'Mar 9, 2026 at 3:47 pm',
+    token: 'USDC', logo: 'https://assets.coingecko.com/coins/images/6319/large/usdc.png',
+    txHash: '7mNkR...xP4sW',
+  },
+  {
+    id: '4', type: 'received', title: 'Received BONK', desc: 'from 7xK...9sU',
+    amount: '+1,250,000 BONK', usdAmount: '+$35.62', time: '2 days ago', date: 'Mar 8, 2026 at 11:20 am',
+    token: 'BONK', logo: 'https://assets.coingecko.com/coins/images/28600/large/bonk.jpg',
+    txHash: '9qWmK...jR3nP', from: '7xKXtg2CW87d9sU',
+  },
+  {
+    id: '5', type: 'sent', title: 'Sent SOL', desc: 'to 2Rp4...7qWx',
+    amount: '-0.5231 SOL', usdAmount: '-$94.28', time: '3 days ago', date: 'Mar 7, 2026 at 6:55 pm',
+    token: 'SOL', logo: 'https://assets.coingecko.com/coins/images/4128/large/solana.png',
+    txHash: '3vNpX...kM8qR', to: '2Rp4sK7nLm3v7qWx',
+  },
+  {
+    id: '6', type: 'swap', title: 'Swapped USDT → SOL', desc: '200 USDT for 1.108 SOL',
+    amount: '+1.108 SOL', usdAmount: '$199.72', time: '4 days ago', date: 'Mar 6, 2026 at 2:30 pm',
+    token: 'SOL', logo: 'https://assets.coingecko.com/coins/images/4128/large/solana.png',
+    txHash: '5kRmN...pQ2sW',
+  },
+  {
+    id: '7', type: 'received', title: 'Received ETH', desc: 'from 0x4a2...9f1c',
+    amount: '+0.0847 ETH', usdAmount: '+$289.94', time: '5 days ago', date: 'Mar 5, 2026 at 9:15 am',
+    token: 'ETH', logo: 'https://assets.coingecko.com/coins/images/279/large/ethereum.png',
+    txHash: '8nQkP...mR5vX', from: '0x4a2bF7c...9f1c',
+  },
+  {
+    id: '8', type: 'sent', title: 'Sent JUP', desc: 'to 6Nm3...4kPx',
+    amount: '-250 JUP', usdAmount: '-$230.00', time: '1 week ago', date: 'Mar 3, 2026 at 4:42 pm',
+    token: 'JUP', logo: 'https://assets.coingecko.com/coins/images/34188/large/jup.png',
+    txHash: '1pXmK...nR7qW', to: '6Nm3vK8sLj2p4kPx',
+  },
+]
+
+const typeColors: Record<TxType, string> = {
+  received: '#4ADE80',
+  sent: '#FF453A',
+  swap: '#AB9FF2',
+}
+
+const typeIcons: Record<TxType, string> = {
+  received: '↓',
+  sent: '↑',
+  swap: '↔',
+}
+
+export default function Activity() {
+  const [selectedTx, setSelectedTx] = useState<Transaction | null>(null)
+
+  if (selectedTx) {
+    const color = typeColors[selectedTx.type]
+    return (
+      <div style={{ background:'#000000', minHeight:'100vh', maxWidth:430, margin:'0 auto', padding:'16px' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:24 }}>
+          <span style={{ fontSize:20, fontWeight:700, color:'#FFF' }}>
+            {selectedTx.type === 'received' ? 'Received' : selectedTx.type === 'sent' ? 'Sent' : 'Swapped'}
+          </span>
+          <button onClick={() => setSelectedTx(null)} style={{ background:'none', border:'none', cursor:'pointer', color:'#8E8E93', padding:4 }}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+
+        <div style={{ display:'flex', justifyContent:'center', marginBottom:16 }}>
+          <div style={{ position:'relative' }}>
+            <div style={{ width:72, height:72, borderRadius:36, background:'#1C1C1E', display:'flex', alignItems:'center', justifyContent:'center', overflow:'hidden' }}>
+              <img src={selectedTx.logo} alt={selectedTx.token} style={{ width:52, height:52, borderRadius:26 }} />
+            </div>
+            <div style={{ position:'absolute', bottom:0, right:0, width:24, height:24, borderRadius:12, background: color, display:'flex', alignItems:'center', justifyContent:'center' }}>
+              <span style={{ fontSize:14, color:'#000', fontWeight:700 }}>{typeIcons[selectedTx.type]}</span>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ textAlign:'center', marginBottom:28 }}>
+          <span style={{ fontSize:32, fontWeight:700, color:'#FFF' }}>{selectedTx.amount}</span>
+          <div style={{ fontSize:15, color:'#8E8E93', marginTop:4 }}>{selectedTx.usdAmount}</div>
+        </div>
+
+        <div style={{ background:'#1C1C1E', borderRadius:18, overflow:'hidden' }}>
+          {[
+            { label: 'Date', value: selectedTx.date },
+            { label: 'Status', value: 'Succeeded', green: true },
+            ...(selectedTx.from ? [{ label: 'From', value: selectedTx.from.slice(0,6) + '...' + selectedTx.from.slice(-4) }] : []),
+            ...(selectedTx.to ? [{ label: 'To', value: selectedTx.to.slice(0,6) + '...' + selectedTx.to.slice(-4) }] : []),
+            { label: 'Network', value: 'Solana' },
+            { label: 'Transaction', value: selectedTx.txHash },
+            { label: 'Network Fee', value: '-0.000005 SOL' },
+          ].map((row, i, arr) => (
+            <div key={row.label} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'14px 20px', borderBottom: i < arr.length-1 ? '1px solid rgba(255,255,255,0.06)' : 'none' }}>
+              <span style={{ fontSize:14, color:'#8E8E93' }}>{row.label}</span>
+              <span style={{ fontSize:14, fontWeight:500, color: (row as any).green ? '#4ADE80' : '#FFF' }}>{row.value}</span>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ padding:'24px 0 8px' }}>
+          <button onClick={() => setSelectedTx(null)} className="tap-feedback" style={{ width:'100%', background:'#AB9FF2', border:'none', borderRadius:28, padding:'18px', fontSize:16, fontWeight:600, color:'#000', cursor:'pointer', fontFamily:'inherit' }}>
+            View on Solscan
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ background:'#000000', minHeight:'100vh', maxWidth:430, margin:'0 auto', paddingBottom: 100 }}>
+      <div style={{ padding:'52px 16px 16px' }}>
+        <div style={{ fontSize:28, fontWeight:700, color:'#FFFFFF' }}>Activity</div>
+      </div>
+      <div style={{ padding:'0 16px' }}>
+        {TXS.map((tx, i) => {
+          const color = typeColors[tx.type]
+          return (
+            <div key={tx.id} onClick={() => setSelectedTx(tx)} style={{
+              display:'flex', alignItems:'center', gap:12, padding:'14px 0', cursor:'pointer',
+              borderBottom: i < TXS.length - 1 ? '1px solid rgba(255,255,255,0.06)' : 'none',
+            }}>
+              <div style={{ width:44, height:44, borderRadius:22, overflow:'hidden', position:'relative', flexShrink:0 }}>
+                <img src={tx.logo} alt={tx.token} style={{ width:44, height:44, borderRadius:22, objectFit:'cover' }} />
+                <div style={{ position:'absolute', bottom:-2, right:-2, width:18, height:18, borderRadius:9, background: color, display:'flex', alignItems:'center', justifyContent:'center', border:'2px solid #000' }}>
+                  <span style={{ fontSize:10, color:'#000', fontWeight:700 }}>{typeIcons[tx.type]}</span>
+                </div>
+              </div>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:15, fontWeight:600, color:'#FFFFFF' }}>{tx.title}</div>
+                <div style={{ fontSize:13, color:'#8E8E93', marginTop:2 }}>{tx.desc}</div>
+                <div style={{ fontSize:12, color:'#8E8E93', marginTop:2 }}>{tx.time}</div>
+              </div>
+              <div style={{ textAlign:'right', flexShrink:0 }}>
+                <div style={{ fontSize:15, fontWeight:600, color: color }}>{tx.usdAmount}</div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      <BottomNav />
+    </div>
+  )
+}
+```
+
+---
+## app/settings/page.tsx
+```
+'use client'
+import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
+import BottomNav from '@/components/BottomNav'
+import { TOKENS } from '@/lib/coingecko'
+import { getTokenAmounts, setTokenAmounts, getWalletName, setWalletName, getCoinGeckoKey, setCoinGeckoKey } from '@/lib/storage'
+
+export default function Settings() {
+  const router = useRouter()
+  const [amounts, setAmounts] = useState<Record<string, string>>({})
+  const [walletName, setWalletNameState] = useState('Wallet 1')
+  const [apiKey, setApiKey] = useState('')
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    const stored = getTokenAmounts()
+    const strAmounts: Record<string, string> = {}
+    TOKENS.forEach(t => { strAmounts[t.symbol] = String(stored[t.symbol] || 0) })
+    setAmounts(strAmounts)
+    setWalletNameState(getWalletName())
+    setApiKey(getCoinGeckoKey())
+  }, [])
+
+  function handleSave() {
+    const numAmounts: Record<string, number> = {}
+    TOKENS.forEach(t => { numAmounts[t.symbol] = parseFloat(amounts[t.symbol]) || 0 })
+    setTokenAmounts(numAmounts)
+    setWalletName(walletName)
+    setCoinGeckoKey(apiKey)
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2000)
+  }
+
+  const inputStyle = {
+    width: '100%', background: '#1C1C1C', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8,
+    color: '#FFFFFF', fontSize: 15, padding: '10px 12px', outline: 'none',
+    fontFamily: 'inherit',
+  }
+
+  const sectionHeader = {
+    fontSize: 12, fontWeight: 600, color: '#AB9FF2',
+    textTransform: 'uppercase' as const, letterSpacing: '1px',
+    padding: '20px 16px 10px',
+  }
+
+  return (
+    <div style={{ background: '#000000', minHeight: '100vh', maxWidth: 430, margin: '0 auto', paddingBottom: 100 }}>
+      <div style={{ display: 'flex', alignItems: 'center', padding: '52px 16px 16px', position: 'relative' }}>
+        <button onClick={() => router.back()} className="tap-feedback" style={{ background: 'none', border: 'none', color: '#AB9FF2', fontSize: 16, cursor: 'pointer', padding: '4px 0', display: 'flex', alignItems: 'center', gap: 4 }}>
+          <svg width="10" height="17" viewBox="0 0 10 17" fill="none"><path d="M9 1L1 8.5L9 16" stroke="#AB9FF2" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          Back
+        </button>
+        <span style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', fontSize: 17, fontWeight: 700, color: '#FFFFFF' }}>Settings</span>
+      </div>
+
+      {/* Wallet Name */}
+      <div style={sectionHeader}>WALLET NAME</div>
+      <div style={{ padding: '0 16px' }}>
+        <input
+          type="text"
+          value={walletName}
+          onChange={e => setWalletNameState(e.target.value)}
+          placeholder="Wallet 1"
+          style={inputStyle}
+        />
+      </div>
+
+      {/* Portfolio */}
+      <div style={sectionHeader}>PORTFOLIO</div>
+      <div style={{ padding: '0 16px' }}>
+        {TOKENS.map((token) => (
+          <div key={token.symbol} style={{
+            display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 16,
+          }}>
+            <div style={{ position: 'relative', flexShrink: 0, marginTop: 22 }}>
+              <img src={token.logo} alt={token.symbol} style={{ width: 40, height: 40, borderRadius: 20 }} />
+              <div style={{
+                position:'absolute', bottom:-1, right:-1,
+                width:16, height:16, borderRadius:8,
+                background:'#1D9BF0',
+                display:'flex', alignItems:'center', justifyContent:'center',
+                border: '1.5px solid #000'
+              }}>
+                <svg width="9" height="7" viewBox="0 0 9 7" fill="none">
+                  <path d="M1 3.5L3.5 6L8 1" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </div>
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, color: '#8E8E93', marginBottom: 4 }}>{token.name} ({token.symbol})</div>
+              <div style={{ fontSize: 11, color: '#8E8E93', marginBottom: 4 }}>Amount</div>
+              <input
+                type="number"
+                value={amounts[token.symbol] || ''}
+                onChange={e => setAmounts(prev => ({ ...prev, [token.symbol]: e.target.value }))}
+                placeholder="0"
+                style={inputStyle}
+              />
+            </div>
+          </div>
+        ))}
+        <button style={{
+          width: '100%', background: 'none', border: 'none',
+          color: '#AB9FF2', fontSize: 15, fontWeight: 500,
+          padding: '14px', textAlign: 'left', cursor: 'pointer',
+          fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 8
+        }}>
+          <span style={{ fontSize: 20 }}>+</span>
+          Add Token
+        </button>
+      </div>
+
+      {/* Save */}
+      <div style={{ padding: '8px 16px 24px' }}>
+        <button onClick={handleSave} className="tap-feedback" style={{
+          width: '100%', background: saved ? '#32D74B' : '#AB9FF2',
+          color: '#FFFFFF', border: 'none', borderRadius: 12,
+          fontSize: 16, fontWeight: 600, padding: '16px',
+          cursor: 'pointer', fontFamily: 'inherit',
+          transition: 'background 0.3s',
+        }}>
+          {saved ? '✓ Saved' : 'Save'}
+        </button>
+      </div>
+
+      <BottomNav />
+    </div>
+  )
+}
+```
+
+---
+## components/BottomNav.tsx
+```
+'use client'
+import Link from 'next/link'
+import { usePathname } from 'next/navigation'
+
+export default function BottomNav() {
+  const path = usePathname()
+  const isHome = path === '/'
+  const isCash = path === '/cash' || path.startsWith('/cash/')
+  const isSwap = path === '/swap'
+  const isChat = path === '/chat'
+  const isExplore = path === '/explore'
+  const purple = '#ab9ff2'
+  const gray = '#6e6e6e'
+  const c = (a: boolean) => a ? purple : gray
+
+  return (
+    <div style={{
+      position:'fixed', bottom:0, left:'50%', transform:'translateX(-50%)',
+      width:'100%', maxWidth:430,
+      background:'#191919',
+      borderTop:'1px solid rgba(255,255,255,0.06)',
+      height:60, display:'flex', alignItems:'center',
+      paddingBottom:'env(safe-area-inset-bottom,0px)', zIndex:100,
+    }}>
+      {/* HOME */}
+      <Link href="/" style={{flex:1,display:'flex',justifyContent:'center',alignItems:'center',height:'100%'}}>
+        {isHome ? (
+          <svg width="24" height="24" viewBox="0 0 24 24" fill={purple}>
+            <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
+          </svg>
+        ) : (
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={gray} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 12L12 3l9 9"/><path d="M9 21V12h6v9"/>
+          </svg>
+        )}
+      </Link>
+
+      {/* CASH */}
+      <Link href="/cash" style={{flex:1,display:'flex',justifyContent:'center',alignItems:'center',height:'100%'}}>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+          <rect x="2" y="5" width="20" height="14" rx="3" stroke={c(isCash)} strokeWidth="1.8"/>
+        </svg>
+      </Link>
+
+      {/* SWAP */}
+      <Link href="/swap" style={{flex:1,display:'flex',justifyContent:'center',alignItems:'center',height:'100%'}}>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={c(isSwap)} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M16 3l4 4-4 4"/>
+          <path d="M20 7H8a4 4 0 0 0-4 4"/>
+          <path d="M8 21l-4-4 4-4"/>
+          <path d="M4 17h12a4 4 0 0 0 4-4"/>
+        </svg>
+      </Link>
+
+      {/* CHAT */}
+      <Link href="/chat" style={{flex:1,display:'flex',justifyContent:'center',alignItems:'center',height:'100%'}}>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={c(isChat)} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          <line x1="9" y1="10" x2="15" y2="10"/>
+          <line x1="9" y1="13.5" x2="13" y2="13.5"/>
+        </svg>
+      </Link>
+
+      {/* EXPLORE */}
+      <Link href="/explore" style={{flex:1,display:'flex',justifyContent:'center',alignItems:'center',height:'100%'}}>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={c(isExplore)} strokeWidth="1.8" strokeLinecap="round">
+          <circle cx="10.5" cy="10.5" r="6.5"/>
+          <path d="m21 21-4.5-4.5"/>
+        </svg>
+      </Link>
+    </div>
+  )
+}
+```
+
+---
+## lib/coingecko.ts
+```
+export const TOKENS = [
+  { symbol: 'SOL', name: 'Solana', id: 'solana', logo: 'https://assets.coingecko.com/coins/images/4128/large/solana.png' },
+  { symbol: 'ETH', name: 'Ethereum', id: 'ethereum', logo: 'https://assets.coingecko.com/coins/images/279/large/ethereum.png' },
+  { symbol: 'BTC', name: 'Bitcoin', id: 'bitcoin', logo: 'https://assets.coingecko.com/coins/images/1/large/bitcoin.png' },
+  { symbol: 'USDT', name: 'Tether', id: 'tether', logo: 'https://assets.coingecko.com/coins/images/325/large/Tether.png' },
+  { symbol: 'USDC', name: 'USD Coin', id: 'usd-coin', logo: 'https://assets.coingecko.com/coins/images/6319/large/usdc.png' },
+  { symbol: 'BONK', name: 'Bonk', id: 'bonk', logo: 'https://assets.coingecko.com/coins/images/28600/large/bonk.jpg' },
+  { symbol: 'JUP', name: 'Jupiter', id: 'jupiter-exchange-solana', logo: 'https://assets.coingecko.com/coins/images/34188/large/jup.png' },
+  { symbol: 'WIF', name: 'dogwifhat', id: 'dogwifcoin', logo: 'https://assets.coingecko.com/coins/images/33566/large/dogwifhat.jpg' },
+]
+
+export type PriceData = {
+  usd: number
+  usd_24h_change: number
+  image?: string
+}
+
+export type PricesMap = Record<string, PriceData>
+
+export const FALLBACK_PRICES: PricesMap = {
+  solana: { usd: 180.42, usd_24h_change: -2.1, image: 'https://assets.coingecko.com/coins/images/4128/large/solana.png' },
+  ethereum: { usd: 3420.15, usd_24h_change: 1.3, image: 'https://assets.coingecko.com/coins/images/279/large/ethereum.png' },
+  bitcoin: { usd: 67250.0, usd_24h_change: 0.8, image: 'https://assets.coingecko.com/coins/images/1/large/bitcoin.png' },
+  tether: { usd: 1.0, usd_24h_change: 0.01, image: 'https://assets.coingecko.com/coins/images/325/large/Tether.png' },
+  'usd-coin': { usd: 1.0, usd_24h_change: 0.0, image: 'https://assets.coingecko.com/coins/images/6319/large/usdc.png' },
+  bonk: { usd: 0.0000285, usd_24h_change: 5.2, image: 'https://assets.coingecko.com/coins/images/28600/large/bonk.jpg' },
+  'jupiter-exchange-solana': { usd: 0.92, usd_24h_change: -1.5, image: 'https://assets.coingecko.com/coins/images/34188/large/jup.png' },
+  dogwifcoin: { usd: 2.85, usd_24h_change: 3.7, image: 'https://assets.coingecko.com/coins/images/33566/large/dogwifhat.jpg' },
+}
+
+// Binance symbol mapping
+const BINANCE_SYMBOLS: Record<string, string> = {
+  'solana': 'SOLUSDT',
+  'bitcoin': 'BTCUSDT',
+  'ethereum': 'ETHUSDT',
+  'tether': 'USDTUSDT',
+  'usd-coin': 'USDCUSDT',
+  'bonk': 'BONKUSDT',
+  'jupiter-exchange-solana': 'JUPUSDT',
+  'dogwifcoin': 'WIFUSDT',
+}
+
+// Period to Binance interval mapping
+const PERIOD_PARAMS: Record<string, {interval: string, limit: number}> = {
+  '1H': { interval: '1m', limit: 60 },
+  '1D': { interval: '5m', limit: 288 },
+  '1W': { interval: '1h', limit: 168 },
+  '1M': { interval: '4h', limit: 180 },
+  'YTD': { interval: '1d', limit: Math.ceil((Date.now() - new Date(new Date().getFullYear(), 0, 1).getTime()) / (24 * 60 * 60 * 1000)) },
+  'ALL': { interval: '1w', limit: 200 },
+}
+
+export async function fetchChartData(coinId: string, period: string): Promise<[number, number][]> {
+  const symbol = BINANCE_SYMBOLS[coinId]
+  if (!symbol || symbol.includes('USDT' + 'USDT')) {
+    // stablecoin or unknown — return flat line
+    return Array.from({length: 10}, (_, i) => [Date.now() - (10-i)*3600000, 1.0])
+  }
+  const { interval, limit } = PERIOD_PARAMS[period] || PERIOD_PARAMS['1D']
+  const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`
+  
+  try {
+    const res = await fetch(url)
+    if (!res.ok) return []
+    const data = await res.json()
+    return data.map((k: any[]) => [k[0], parseFloat(k[4])] as [number, number])
+  } catch (e) {
+    console.error('Chart fetch error:', e)
+    return []
+  }
+}
+
+
+// Shared price cache for consistency across all pages
+let priceCache: PricesMap | null = null
+let lastFetch = 0
+
+export async function fetchPrices(): Promise<PricesMap> {
+  if (priceCache && Date.now() - lastFetch < 30000) return priceCache
+  const symbols = ['SOLUSDT','BTCUSDT','ETHUSDT','BONKUSDT','JUPUSDT','WIFUSDT']
+  const url = `https://api.binance.com/api/v3/ticker/24hr?symbols=${JSON.stringify(symbols)}`
+  
+  try {
+    const res = await fetch(url)
+    if (!res.ok) return FALLBACK_PRICES
+    const data: any[] = await res.json()
+    
+    const result: PricesMap = { ...FALLBACK_PRICES }
+    const symbolToId: Record<string, string> = {
+      'SOLUSDT': 'solana',
+      'BTCUSDT': 'bitcoin',
+      'ETHUSDT': 'ethereum',
+      'BONKUSDT': 'bonk',
+      'JUPUSDT': 'jupiter-exchange-solana',
+      'WIFUSDT': 'dogwifcoin',
+    }
+    
+    for (const ticker of data) {
+      const id = symbolToId[ticker.symbol]
+      if (id) {
+        result[id] = {
+          usd: parseFloat(ticker.lastPrice),
+          usd_24h_change: parseFloat(ticker.priceChangePercent),
+          image: result[id]?.image // preserve existing image
+        }
+      }
+    }
+    
+    // USDT and USDC are stablecoins, hardcode
+    result['tether'] = { usd: 1.0, usd_24h_change: 0, image: result['tether']?.image }
+    result['usd-coin'] = { usd: 1.0, usd_24h_change: 0, image: result['usd-coin']?.image }
+    
+    priceCache = result
+    lastFetch = Date.now()
+    return result
+  } catch (e) {
+    console.error('Fetch prices error:', e)
+    return FALLBACK_PRICES
+  }
+}
+
+export function formatPrice(price: number): string {
+  if (price < 0.001) return '$' + price.toFixed(8)
+  if (price < 1) return '$' + price.toFixed(4)
+  if (price < 100) return '$' + price.toFixed(2)
+  return '$' + price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+export function formatValue(value: number): string {
+  if (value >= 1000000) return '$' + (value / 1000000).toFixed(2) + 'M'
+  if (value >= 1000) return '$' + value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return '$' + value.toFixed(2)
+}
+
+export function formatAmount(amount: number, symbol: string): string {
+  if (amount >= 1000000) return (amount / 1000000).toFixed(2) + 'M ' + symbol
+  if (amount >= 1000) return amount.toLocaleString('en-US', { maximumFractionDigits: 2 }) + ' ' + symbol
+  if (amount < 0.01) return amount.toFixed(6) + ' ' + symbol
+  return amount.toFixed(4).replace(/\.?0+$/, '') + ' ' + symbol
+}
+```
+
+---
+## lib/storage.ts
+```
+export const WALLET_ADDRESS = '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU'
+export const WALLET_ADDRESS_SHORT = '7xKX...gAsU'
+
+export const DEFAULT_AMOUNTS: Record<string, number> = {
+  SOL: 4.2831,
+  ETH: 0.1847,
+  BTC: 0.00412,
+  USDT: 847.50,
+  USDC: 320.00,
+  BONK: 2847291,
+  JUP: 891.4,
+  WIF: 1204.7,
+}
+
+export function getTokenAmounts(): Record<string, number> {
+  if (typeof window === 'undefined') return DEFAULT_AMOUNTS
+  try {
+    const stored = localStorage.getItem('tokenAmounts')
+    if (stored) return { ...DEFAULT_AMOUNTS, ...JSON.parse(stored) }
+  } catch {}
+  return DEFAULT_AMOUNTS
+}
+
+export function setTokenAmounts(amounts: Record<string, number>) {
+  if (typeof window === 'undefined') return
+  localStorage.setItem('tokenAmounts', JSON.stringify(amounts))
+}
+
+export function getWalletName(): string {
+  if (typeof window === 'undefined') return 'Wallet 1'
+  return localStorage.getItem('walletName') || 'Account 1'
+}
+
+export function setWalletName(name: string) {
+  if (typeof window === 'undefined') return
+  localStorage.setItem('walletName', name)
+}
+
+export function getWalletHandle(): string {
+  if (typeof window === 'undefined') return '@NearHeath3094'
+  return localStorage.getItem('walletHandle') || '@NearHeath3094'
+}
+
+export function setWalletHandle(handle: string) {
+  if (typeof window === 'undefined') return
+  localStorage.setItem('walletHandle', handle)
+}
+
+export function getWalletSkin(): 'phantom' | 'trust' {
+  if (typeof window === 'undefined') return 'phantom'
+  return (localStorage.getItem('walletSkin') as 'phantom' | 'trust') || 'phantom'
+}
+
+export function setWalletSkin(skin: 'phantom' | 'trust') {
+  if (typeof window === 'undefined') return
+  localStorage.setItem('walletSkin', skin)
+}
+
+export function getCoinGeckoKey(): string {
+  if (typeof window === 'undefined') return ''
+  return localStorage.getItem('coinGeckoKey') || ''
+}
+
+export function setCoinGeckoKey(key: string) {
+  if (typeof window === 'undefined') return
+  localStorage.setItem('coinGeckoKey', key)
+}
+
+export function getBalanceHidden(): boolean {
+  if (typeof window === 'undefined') return false
+  return localStorage.getItem('balanceHidden') === 'true'
+}
+
+export function setBalanceHidden(hidden: boolean) {
+  if (typeof window === 'undefined') return
+  localStorage.setItem('balanceHidden', hidden ? 'true' : 'false')
+}
+
+export function getSelectedWallet(): string {
+  if (typeof window === 'undefined') return 'Wallet 1'
+  return localStorage.getItem('selectedWallet') || 'Account 1'
+}
+
+export function setSelectedWallet(name: string) {
+  if (typeof window === 'undefined') return
+  localStorage.setItem('selectedWallet', name)
+  localStorage.setItem('walletName', name)
+}
+
+export function generateFakeTxHash(): string {
+  const chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+  const rand = (n: number) => Array.from({length: n}, () => chars[Math.floor(Math.random() * chars.length)]).join('')
+  return rand(5) + '...' + rand(5)
+}
+```
+
+---
+## public/manifest.json
+```
+{
+  "name": "Phantom",
+  "short_name": "Phantom",
+  "description": "Phantom Wallet",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#131313",
+  "theme_color": "#131313",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
+```
+
